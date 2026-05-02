@@ -1,7 +1,11 @@
 package com.swiftbrowser.ui.speeddial
 
+import android.os.Handler
+import android.os.Looper
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
@@ -72,7 +76,18 @@ class SpeedDialAdapter(
         private val binding: ItemSpeedDialBinding
     ) : RecyclerView.ViewHolder(binding.root) {
 
+        private val handler = Handler(Looper.getMainLooper())
+        private var showDeleteRunnable: Runnable? = null
+        private var downX = 0f
+        private var downY = 0f
+        private val touchSlop by lazy { ViewConfiguration.get(binding.root.context).scaledTouchSlop }
+
         fun bind(bookmark: Bookmark) {
+            // 重置状态（view 可能被复用，仅重置 elevation，scale/alpha 由 onBindViewHolder 管理）
+            showDeleteRunnable?.let { handler.removeCallbacks(it) }
+            showDeleteRunnable = null
+            itemView.elevation = 0f
+
             binding.tvTitle.text = bookmark.title
 
             FaviconProvider.loadSpeedDialIcon(
@@ -82,9 +97,70 @@ class SpeedDialAdapter(
             )
 
             binding.root.setOnClickListener { onClickSite(bookmark) }
+
+            binding.root.setOnTouchListener { _, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downX = event.rawX
+                        downY = event.rawY
+                        false
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (showDeleteRunnable != null && onStartDrag != null) {
+                            val dx = event.rawX - downX
+                            val dy = event.rawY - downY
+                            val distance = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
+                            if (distance > touchSlop) {
+                                // 移动超过阈值 → 取消删除定时器，触发拖动
+                                handler.removeCallbacks(showDeleteRunnable!!)
+                                showDeleteRunnable = null
+                                itemView.apply {
+                                    scaleX = 1.0f
+                                    scaleY = 1.0f
+                                    alpha = 1.0f
+                                    elevation = 0f
+                                }
+                                onStartDrag.invoke(this@SiteViewHolder)
+                            }
+                        }
+                        false
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        // 手指抬起 → 取消删除定时器，恢复视觉状态
+                        showDeleteRunnable?.let { handler.removeCallbacks(it) }
+                        showDeleteRunnable = null
+                        itemView.apply {
+                            scaleX = 1.0f
+                            scaleY = 1.0f
+                            alpha = 1.0f
+                            elevation = 0f
+                        }
+                        false
+                    }
+                    else -> false
+                }
+            }
+
             binding.root.setOnLongClickListener {
                 if (onStartDrag != null) {
-                    onStartDrag.invoke(this)
+                    // 提起视觉效果
+                    itemView.apply {
+                        scaleX = 1.15f
+                        scaleY = 1.15f
+                        alpha = 0.8f
+                        elevation = 16f
+                    }
+                    // 1.5 秒后弹出删除面板（加上系统长按 ~500ms，总共约 2 秒）
+                    showDeleteRunnable = Runnable {
+                        itemView.apply {
+                            scaleX = 1.0f
+                            scaleY = 1.0f
+                            alpha = 1.0f
+                            elevation = 0f
+                        }
+                        onLongClickSite(bookmark)
+                    }
+                    handler.postDelayed(showDeleteRunnable!!, 1500)
                 } else {
                     onLongClickSite(bookmark)
                 }
