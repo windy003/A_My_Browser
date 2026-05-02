@@ -18,15 +18,14 @@
         <FrameLayout
             android:id="@+id/iconContainer"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:padding="10dp">
+            android:layout_height="match_parent">
 
             <ImageView
                 android:id="@+id/ivIcon"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:contentDescription="网站图标"
-                android:scaleType="fitCenter"
+                android:scaleType="centerCrop"
                 android:src="@drawable/ic_public" />
 
             <ImageView

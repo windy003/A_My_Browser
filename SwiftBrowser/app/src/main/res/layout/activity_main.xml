@@ -237,15 +237,6 @@
             android:contentDescription="前进"
             android:src="@drawable/ic_arrow_forward" />
 
-        <ImageButton
-            android:id="@+id/btnHome"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:background="?attr/selectableItemBackground"
-            android:contentDescription="主页"
-            android:src="@drawable/ic_home" />
-
         <!-- 标签按钮 -->
         <FrameLayout
             android:id="@+id/btnTabs"
@@ -267,6 +258,15 @@
                 android:textStyle="bold" />
 
         </FrameLayout>
+
+        <ImageButton
+            android:id="@+id/btnHome"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="?attr/selectableItemBackground"
+            android:contentDescription="主页"
+            android:src="@drawable/ic_home" />
 
     </LinearLayout>
 
