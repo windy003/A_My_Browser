@@ -1,0 +1,54 @@
+[
+    {
+        "merged": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-mergeDebugResources-49:\\layout\\dialog_folder_content.xml",
+        "source": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-main-52:\\layout\\dialog_folder_content.xml"
+    },
+    {
+        "merged": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-mergeDebugResources-49:\\layout\\activity_bookmark.xml",
+        "source": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-main-52:\\layout\\activity_bookmark.xml"
+    },
+    {
+        "merged": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-mergeDebugResources-49:\\layout\\dialog_add_speed_dial.xml",
+        "source": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-main-52:\\layout\\dialog_add_speed_dial.xml"
+    },
+    {
+        "merged": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-mergeDebugResources-49:\\layout\\item_bookmark_folder.xml",
+        "source": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-main-52:\\layout\\item_bookmark_folder.xml"
+    },
+    {
+        "merged": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-mergeDebugResources-49:\\layout\\item_tab.xml",
+        "source": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-main-52:\\layout\\item_tab.xml"
+    },
+    {
+        "merged": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-mergeDebugResources-49:\\layout\\item_bookmark.xml",
+        "source": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-main-52:\\layout\\item_bookmark.xml"
+    },
+    {
+        "merged": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-mergeDebugResources-49:\\layout\\activity_login.xml",
+        "source": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-main-52:\\layout\\activity_login.xml"
+    },
+    {
+        "merged": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-mergeDebugResources-49:\\layout\\activity_history.xml",
+        "source": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-main-52:\\layout\\activity_history.xml"
+    },
+    {
+        "merged": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-mergeDebugResources-49:\\layout\\item_speed_dial.xml",
+        "source": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-main-52:\\layout\\item_speed_dial.xml"
+    },
+    {
+        "merged": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-mergeDebugResources-49:\\layout\\activity_main.xml",
+        "source": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-main-52:\\layout\\activity_main.xml"
+    },
+    {
+        "merged": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-mergeDebugResources-49:\\layout\\item_speed_dial_folder.xml",
+        "source": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-main-52:\\layout\\item_speed_dial_folder.xml"
+    },
+    {
+        "merged": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-mergeDebugResources-49:\\layout\\item_history.xml",
+        "source": "C:\\Users\\92892\\.gradle\\daemon\\8.5\\com.swiftbrowser.app-main-52:\\layout\\item_history.xml"
+    },
+    {
+        "merged": "com.swiftbrowser.app-mergeDebugResources-49:/layout/item_tab.xml",
+        "source": "com.swiftbrowser.app-main-52:/layout/item_tab.xml"
+    }
+]
