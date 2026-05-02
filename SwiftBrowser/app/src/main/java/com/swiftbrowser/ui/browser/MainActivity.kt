@@ -60,6 +60,12 @@ class MainActivity : AppCompatActivity() {
     private val currentUrl: String? get() = activeTab?.url
     private val currentTitle: String? get() = activeTab?.title
 
+    override fun attachBaseContext(newBase: android.content.Context?) {
+        val config = android.content.res.Configuration(newBase?.resources?.configuration)
+        config.fontScale = 1.0f
+        super.attachBaseContext(newBase?.createConfigurationContext(config))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -262,6 +268,9 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(): WebView {
         return WebView(this).apply {
+            // 允许第三方 Cookie（Google 登录需要跨域 Cookie）
+            val cookieManager = android.webkit.CookieManager.getInstance()
+            cookieManager.setAcceptThirdPartyCookies(this, true)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.loadWithOverviewMode = true
@@ -273,6 +282,11 @@ class MainActivity : AppCompatActivity() {
             settings.mediaPlaybackRequiresUserGesture = false
             settings.databaseEnabled = true
             settings.cacheMode = WebSettings.LOAD_DEFAULT
+            // 防止 WebView 字体跟随系统字体缩放
+            settings.textZoom = 100
+
+            // 伪装成普通浏览器，避免 Google 拒绝 WebView 中的 OAuth 登录
+            settings.userAgentString = settings.userAgentString.replace("; wv", "")
 
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -337,6 +351,19 @@ class MainActivity : AppCompatActivity() {
                     val tab = findTabByWebView(view) ?: return
                     tab.title = title
                 }
+
+                // 处理 OAuth 等需要弹窗的页面（如 Google 登录），复用当前 WebView
+                override fun onCreateWindow(
+                    view: WebView?,
+                    isDialog: Boolean,
+                    isUserGesture: Boolean,
+                    resultMsg: android.os.Message?
+                ): Boolean {
+                    val transport = resultMsg?.obj as? WebView.WebViewTransport
+                    transport?.webView = view
+                    resultMsg?.sendToTarget()
+                    return true
+                }
             }
 
             setOnScrollChangeListener { _, _, scrollY, _, _ ->
@@ -399,6 +426,27 @@ class MainActivity : AppCompatActivity() {
             onMoveToFolder = { dragItem, targetFolder ->
                 lifecycleScope.launch {
                     bookmarkDao.moveTo(dragItem.bookmark.id, targetFolder.folder.id)
+                }
+            },
+            onReorder = { reorderedList ->
+                lifecycleScope.launch {
+                    reorderedList.forEachIndexed { index, item ->
+                        when (item) {
+                            is SpeedDialItem.Site ->
+                                if (item.bookmark.position != index)
+                                    bookmarkDao.update(item.bookmark.copy(position = index))
+                            is SpeedDialItem.Folder ->
+                                if (item.folder.position != index)
+                                    bookmarkDao.update(item.folder.copy(position = index))
+                        }
+                    }
+                }
+            },
+            onNoMoveDragEnd = { item ->
+                // 长按浮起后没有移动 → 弹出编辑/删除对话框
+                when (item) {
+                    is SpeedDialItem.Site -> showSpeedDialSiteOptions(item.bookmark)
+                    is SpeedDialItem.Folder -> showFolderOptions(item.folder)
                 }
             }
         )
@@ -484,15 +532,14 @@ class MainActivity : AppCompatActivity() {
                 closeFolderOverlay()
                 loadUrl(bookmark.url ?: "")
             },
-            onLongClickSite = { bookmark ->
+            onLongClickSite = { bookmark -> showSpeedDialSiteOptions(bookmark) },
+            onStartDrag = { viewHolder ->
+                val position = viewHolder.bindingAdapterPosition
+                if (position == RecyclerView.NO_POSITION) return@SpeedDialAdapter
+                val item = folderAdapter.currentList.getOrNull(position) as? SpeedDialItem.Site ?: return@SpeedDialAdapter
+                val bookmark = item.bookmark
                 val clipData = ClipData.newPlainText("bookmarkId", bookmark.id.toString())
-                val shadow = View.DragShadowBuilder(
-                    binding.rvFolderItems.findViewHolderForAdapterPosition(
-                        folderAdapter.currentList.indexOfFirst {
-                            it is SpeedDialItem.Site && it.bookmark.id == bookmark.id
-                        }
-                    )?.itemView
-                )
+                val shadow = View.DragShadowBuilder(viewHolder.itemView)
                 binding.rvFolderItems.startDragAndDrop(clipData, shadow, bookmark, 0)
             },
             onClickFolder = { _, _ -> },
