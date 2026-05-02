@@ -9,6 +9,7 @@ import android.graphics.Canvas
 import android.net.Uri
 import android.os.Bundle
 import android.view.DragEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.webkit.*
@@ -19,6 +20,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.PagerSnapHelper
@@ -68,6 +70,7 @@ class MainActivity : AppCompatActivity() {
         setupBottomBar()
         setupMenuButton()
         setupTabManager()
+        setupSwipeRefresh()
         startAutoSync()
 
         // 创建第一个标签
@@ -290,6 +293,7 @@ class MainActivity : AppCompatActivity() {
                     if (tab == activeTab) {
                         binding.etUrl.setText(url)
                         binding.progressBar.visibility = View.GONE
+                        binding.swipeRefresh.isRefreshing = false
                     }
                     // 记录历史
                     if (url != null && url != "about:blank") {
@@ -334,6 +338,12 @@ class MainActivity : AppCompatActivity() {
                     tab.title = title
                 }
             }
+
+            setOnScrollChangeListener { _, _, scrollY, _, _ ->
+                if (this == activeTab?.webView) {
+                    binding.swipeRefresh.isEnabled = scrollY == 0
+                }
+            }
         }
     }
 
@@ -349,12 +359,23 @@ class MainActivity : AppCompatActivity() {
             onLongClickSite = { bookmark -> showSpeedDialSiteOptions(bookmark) },
             onClickFolder = { folder, children -> showFolderContent(folder, children) },
             onLongClickFolder = { folder -> showFolderOptions(folder) },
-            onStartDrag = { viewHolder -> itemTouchHelper.startDrag(viewHolder) }
+            onStartDrag = { viewHolder -> itemTouchHelper.startDrag(viewHolder) },
+            onBatchDelete = { bookmark -> confirmDeleteSpeedDial(bookmark) }
         )
 
         binding.rvSpeedDial.apply {
             layoutManager = GridLayoutManager(this@MainActivity, 5)
             adapter = speedDialAdapter
+        }
+
+        // 批量删除模式下，点击空白区域退出
+        binding.rvSpeedDial.setOnTouchListener { view, event ->
+            if (event.action == MotionEvent.ACTION_DOWN && speedDialAdapter.batchDeleteMode) {
+                if (binding.rvSpeedDial.findChildViewUnder(event.x, event.y) == null) {
+                    speedDialAdapter.exitBatchDeleteMode()
+                }
+            }
+            false
         }
 
         val dragCallback = SpeedDialDragHelper(
@@ -706,8 +727,8 @@ class MainActivity : AppCompatActivity() {
                         }
                         true
                     }
-                    R.id.action_new_tab -> {
-                        createNewTab()
+                    R.id.action_batch_delete -> {
+                        speedDialAdapter.enterBatchDeleteMode()
                         true
                     }
                     R.id.action_sync -> {
@@ -730,6 +751,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupSwipeRefresh() {
+        binding.swipeRefresh.isEnabled = false
+        binding.swipeRefresh.setOnRefreshListener {
+            activeTab?.webView?.reload()
+        }
+    }
+
     // ==================== 核心功能 ====================
 
     private fun loadUrl(url: String) {
@@ -742,6 +770,7 @@ class MainActivity : AppCompatActivity() {
         isShowingWebView = true
         binding.webViewContainer.visibility = View.VISIBLE
         binding.speedDialContainer.visibility = View.GONE
+        binding.swipeRefresh.isEnabled = activeTab?.webView?.scrollY == 0
         hideTabOverlay()
     }
 
@@ -749,6 +778,7 @@ class MainActivity : AppCompatActivity() {
         isShowingWebView = false
         binding.webViewContainer.visibility = View.GONE
         binding.speedDialContainer.visibility = View.VISIBLE
+        binding.swipeRefresh.isEnabled = false
         binding.etUrl.setText("")
         hideTabOverlay()
     }
@@ -836,7 +866,9 @@ class MainActivity : AppCompatActivity() {
 
     @Deprecated("Use OnBackPressedCallback")
     override fun onBackPressed() {
-        if (binding.tabOverlay.visibility == View.VISIBLE) {
+        if (speedDialAdapter.batchDeleteMode) {
+            speedDialAdapter.exitBatchDeleteMode()
+        } else if (binding.tabOverlay.visibility == View.VISIBLE) {
             hideTabOverlay()
         } else if (binding.folderOverlay.visibility == View.VISIBLE) {
             closeFolderOverlay()

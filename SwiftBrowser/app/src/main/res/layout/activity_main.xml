@@ -66,35 +66,31 @@
         android:visibility="gone" />
 
     <!-- 内容区域 -->
-    <FrameLayout
+    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+        android:id="@+id/swipeRefresh"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <!-- WebView 容器：多个标签的 WebView 放在这里 -->
         <FrameLayout
-            android:id="@+id/webViewContainer"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:visibility="gone" />
+            android:layout_height="match_parent">
 
-        <!-- 快速拨号首页 -->
-        <LinearLayout
-            android:id="@+id/speedDialContainer"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:background="@color/speed_dial_bg"
-            android:orientation="vertical"
-            android:padding="16dp">
+            <!-- WebView 容器：多个标签的 WebView 放在这里 -->
+            <FrameLayout
+                android:id="@+id/webViewContainer"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone" />
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                android:text="@string/speed_dial"
-                android:textColor="@color/text_primary"
-                android:textSize="22sp"
-                android:textStyle="bold" />
+            <!-- 快速拨号首页 -->
+            <LinearLayout
+                android:id="@+id/speedDialContainer"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@color/speed_dial_bg"
+                android:orientation="vertical"
+                android:padding="16dp">
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/rvSpeedDial"
@@ -210,6 +206,8 @@
         </FrameLayout>
 
     </FrameLayout>
+
+</androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
     <!-- 底部导航栏 -->
     <LinearLayout

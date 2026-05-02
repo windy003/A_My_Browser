@@ -1,10 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
     <item
-        android:id="@+id/action_new_tab"
-        android:icon="@drawable/ic_add"
-        android:title="新建标签页" />
-    <item
         android:id="@+id/action_bookmarks"
         android:icon="@drawable/ic_bookmark"
         android:title="@string/bookmarks" />
@@ -24,6 +20,10 @@
         android:id="@+id/action_sync"
         android:icon="@drawable/ic_sync"
         android:title="@string/sync" />
+    <item
+        android:id="@+id/action_batch_delete"
+        android:icon="@drawable/ic_delete"
+        android:title="批量删除" />
     <item
         android:id="@+id/action_login"
         android:icon="@drawable/ic_person"
