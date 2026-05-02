@@ -1,11 +1,7 @@
 package com.swiftbrowser.ui.speeddial
 
-import android.os.Handler
-import android.os.Looper
 import android.view.LayoutInflater
-import android.view.MotionEvent
 import android.view.View
-import android.view.ViewConfiguration
 import android.view.ViewGroup
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
@@ -20,12 +16,14 @@ class SpeedDialAdapter(
     private val onLongClickSite: (Bookmark) -> Unit,
     private val onClickFolder: (Bookmark, List<Bookmark>) -> Unit,
     private val onLongClickFolder: (Bookmark) -> Unit,
-    private val onStartDrag: ((RecyclerView.ViewHolder) -> Unit)? = null
+    private val onStartDrag: ((RecyclerView.ViewHolder) -> Unit)? = null,
+    private val onBatchDelete: (Bookmark) -> Unit = {}
 ) : ListAdapter<SpeedDialItem, RecyclerView.ViewHolder>(DiffCallback()) {
 
     companion object {
         const val TYPE_SITE = 0
         const val TYPE_FOLDER = 1
+        private const val PAYLOAD_BATCH_MODE = "batch_mode"
     }
 
     var highlightPosition: Int = -1
@@ -35,6 +33,21 @@ class SpeedDialAdapter(
             if (old >= 0 && old < itemCount) notifyItemChanged(old)
             if (value >= 0 && value < itemCount) notifyItemChanged(value)
         }
+
+    var batchDeleteMode: Boolean = false
+        private set
+
+    fun enterBatchDeleteMode() {
+        if (batchDeleteMode) return
+        batchDeleteMode = true
+        notifyItemRangeChanged(0, itemCount, PAYLOAD_BATCH_MODE)
+    }
+
+    fun exitBatchDeleteMode() {
+        if (!batchDeleteMode) return
+        batchDeleteMode = false
+        notifyItemRangeChanged(0, itemCount, PAYLOAD_BATCH_MODE)
+    }
 
     override fun getItemViewType(position: Int): Int {
         return when (getItem(position)) {
@@ -60,6 +73,20 @@ class SpeedDialAdapter(
         }
     }
 
+    override fun onBindViewHolder(
+        holder: RecyclerView.ViewHolder,
+        position: Int,
+        payloads: MutableList<Any>
+    ) {
+        if (payloads.contains(PAYLOAD_BATCH_MODE)) {
+            if (holder is SiteViewHolder) {
+                holder.updateBatchDeleteUI()
+            }
+            return
+        }
+        super.onBindViewHolder(holder, position, payloads)
+    }
+
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         val isHighlighted = position == highlightPosition
         holder.itemView.scaleX = if (isHighlighted) 1.15f else 1.0f
@@ -76,18 +103,7 @@ class SpeedDialAdapter(
         private val binding: ItemSpeedDialBinding
     ) : RecyclerView.ViewHolder(binding.root) {
 
-        private val handler = Handler(Looper.getMainLooper())
-        private var showDeleteRunnable: Runnable? = null
-        private var downX = 0f
-        private var downY = 0f
-        private val touchSlop by lazy { ViewConfiguration.get(binding.root.context).scaledTouchSlop }
-
         fun bind(bookmark: Bookmark) {
-            // 重置状态（view 可能被复用，仅重置 elevation，scale/alpha 由 onBindViewHolder 管理）
-            showDeleteRunnable?.let { handler.removeCallbacks(it) }
-            showDeleteRunnable = null
-            itemView.elevation = 0f
-
             binding.tvTitle.text = bookmark.title
 
             FaviconProvider.loadSpeedDialIcon(
@@ -96,76 +112,27 @@ class SpeedDialAdapter(
                 customIconUrl = bookmark.favicon
             )
 
-            binding.root.setOnClickListener { onClickSite(bookmark) }
+            // X 仅作视觉指示
+            binding.btnDelete.visibility = if (batchDeleteMode) View.VISIBLE else View.GONE
 
-            binding.root.setOnTouchListener { _, event ->
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        downX = event.rawX
-                        downY = event.rawY
-                        false
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        if (showDeleteRunnable != null && onStartDrag != null) {
-                            val dx = event.rawX - downX
-                            val dy = event.rawY - downY
-                            val distance = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
-                            if (distance > touchSlop) {
-                                // 移动超过阈值 → 取消删除定时器，触发拖动
-                                handler.removeCallbacks(showDeleteRunnable!!)
-                                showDeleteRunnable = null
-                                itemView.apply {
-                                    scaleX = 1.0f
-                                    scaleY = 1.0f
-                                    alpha = 1.0f
-                                    elevation = 0f
-                                }
-                                onStartDrag.invoke(this@SiteViewHolder)
-                            }
-                        }
-                        false
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        // 手指抬起 → 取消删除定时器，恢复视觉状态
-                        showDeleteRunnable?.let { handler.removeCallbacks(it) }
-                        showDeleteRunnable = null
-                        itemView.apply {
-                            scaleX = 1.0f
-                            scaleY = 1.0f
-                            alpha = 1.0f
-                            elevation = 0f
-                        }
-                        false
-                    }
-                    else -> false
+            // 点击：批量模式下任意位置删除，否则打开网站
+            binding.root.setOnClickListener {
+                if (batchDeleteMode) {
+                    onBatchDelete(bookmark)
+                } else {
+                    onClickSite(bookmark)
                 }
             }
 
+            // 长按：弹出编辑/删除对话框
             binding.root.setOnLongClickListener {
-                if (onStartDrag != null) {
-                    // 提起视觉效果
-                    itemView.apply {
-                        scaleX = 1.15f
-                        scaleY = 1.15f
-                        alpha = 0.8f
-                        elevation = 16f
-                    }
-                    // 1.5 秒后弹出删除面板（加上系统长按 ~500ms，总共约 2 秒）
-                    showDeleteRunnable = Runnable {
-                        itemView.apply {
-                            scaleX = 1.0f
-                            scaleY = 1.0f
-                            alpha = 1.0f
-                            elevation = 0f
-                        }
-                        onLongClickSite(bookmark)
-                    }
-                    handler.postDelayed(showDeleteRunnable!!, 1500)
-                } else {
-                    onLongClickSite(bookmark)
-                }
+                onLongClickSite(bookmark)
                 true
             }
+        }
+
+        fun updateBatchDeleteUI() {
+            binding.btnDelete.visibility = if (batchDeleteMode) View.VISIBLE else View.GONE
         }
     }
 
