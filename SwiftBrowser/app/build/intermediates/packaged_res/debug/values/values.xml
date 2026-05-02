@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="accent">#FF6D00</color>
+    <color name="background">#FAFAFA</color>
+    <color name="black">#000000</color>
+    <color name="card_background">#FFFFFF</color>
+    <color name="divider">#E0E0E0</color>
+    <color name="gray_dark">#616161</color>
+    <color name="gray_light">#F5F5F5</color>
+    <color name="gray_medium">#9E9E9E</color>
+    <color name="primary">#1565C0</color>
+    <color name="primary_dark">#0D47A1</color>
+    <color name="primary_light">#42A5F5</color>
+    <color name="red">#D32F2F</color>
+    <color name="speed_dial_bg">#F0F4F8</color>
+    <color name="text_primary">#212121</color>
+    <color name="text_secondary">#757575</color>
+    <color name="white">#FFFFFF</color>
+    <string name="add_bookmark">添加书签</string>
+    <string name="add_speed_dial">添加快速拨号</string>
+    <string name="app_name">Swift 浏览器</string>
+    <string name="bookmark_added">已添加书签</string>
+    <string name="bookmark_deleted">书签已删除</string>
+    <string name="bookmark_exists">该网页已在书签中</string>
+    <string name="bookmarks">书签</string>
+    <string name="cancel">取消</string>
+    <string name="confirm_delete">确认删除？</string>
+    <string name="confirm_delete_message">确定要删除"%s"吗？</string>
+    <string name="default_web_client_id" translatable="false">551006771706-4oie0uukordb1519h1idnuc2iaoog0ji.apps.googleusercontent.com</string>
+    <string name="delete">删除</string>
+    <string name="delete_folder">删除文件夹</string>
+    <string name="delete_folder_message">删除文件夹"%s"？\n文件夹内的快速拨号将移回首页</string>
+    <string name="edit_speed_dial">编辑快速拨号</string>
+    <string name="email">邮箱</string>
+    <string name="folder_name">文件夹名称</string>
+    <string name="gcm_defaultSenderId" translatable="false">551006771706</string>
+    <string name="google_api_key" translatable="false">AIzaSyDn-rgvZh7uGLd4kVVSHNt_StqoVqys3eM</string>
+    <string name="google_app_id" translatable="false">1:551006771706:android:54f57fe3a9af248c202c43</string>
+    <string name="google_crash_reporting_api_key" translatable="false">AIzaSyDn-rgvZh7uGLd4kVVSHNt_StqoVqys3eM</string>
+    <string name="google_storage_bucket" translatable="false">mybrowser-fe48e.firebasestorage.app</string>
+    <string name="icon_url">图标网址（可选）</string>
+    <string name="login">登录</string>
+    <string name="login_with_email">使用邮箱登录</string>
+    <string name="login_with_google">使用 Google 账号登录</string>
+    <string name="move_to_folder">移入文件夹</string>
+    <string name="new_folder">新建文件夹</string>
+    <string name="no_bookmarks">暂无书签</string>
+    <string name="no_folder">不归组（留在首页）</string>
+    <string name="no_speed_dials">暂无快速拨号\n点击 + 添加</string>
+    <string name="password">密码</string>
+    <string name="please_login">请先登录以使用同步功能</string>
+    <string name="project_id" translatable="false">mybrowser-fe48e</string>
+    <string name="register">注册</string>
+    <string name="remove_from_folder">移出文件夹</string>
+    <string name="rename_folder">重命名文件夹</string>
+    <string name="save">保存</string>
+    <string name="search_or_url">搜索或输入网址</string>
+    <string name="sign_in">登录</string>
+    <string name="sign_out">退出登录</string>
+    <string name="speed_dial">快速拨号</string>
+    <string name="speed_dial_added">快速拨号已添加</string>
+    <string name="sync">同步</string>
+    <string name="sync_failed">同步失败：%s</string>
+    <string name="sync_success">同步成功</string>
+    <string name="syncing">正在同步…</string>
+    <string name="title">标题</string>
+    <string name="url">网址</string>
+    <style name="DialogTheme" parent="Theme.MaterialComponents.Light.Dialog.Alert">
+        <item name="colorPrimary">@color/primary</item>
+        <item name="colorAccent">@color/accent</item>
+    </style>
+    <style name="Theme.SwiftBrowser" parent="Theme.MaterialComponents.Light.NoActionBar">
+        <item name="colorPrimary">@color/primary</item>
+        <item name="colorPrimaryDark">@color/primary_dark</item>
+        <item name="colorAccent">@color/accent</item>
+        <item name="android:statusBarColor">@color/primary_dark</item>
+        <item name="android:windowBackground">@color/background</item>
+    </style>
+</resources>

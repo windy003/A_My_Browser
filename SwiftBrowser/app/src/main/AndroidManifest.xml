@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:name=".SwiftBrowserApp"
+        android:allowBackup="true"
+        android:icon="@drawable/2048x2048"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.SwiftBrowser"
+        android:usesCleartextTraffic="true">
+
+        <activity
+            android:name=".ui.browser.MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".ui.bookmark.BookmarkActivity"
+            android:label="@string/bookmarks"
+            android:parentActivityName=".ui.browser.MainActivity" />
+
+        <activity
+            android:name=".ui.history.HistoryActivity"
+            android:label="历史记录"
+            android:parentActivityName=".ui.browser.MainActivity" />
+
+        <activity
+            android:name=".ui.auth.LoginActivity"
+            android:label="@string/sign_in" />
+
+    </application>
+
+</manifest>
