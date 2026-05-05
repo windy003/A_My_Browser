@@ -80,11 +80,30 @@ class SpeedDialAdapter(
         return false
     }
 
-    /** 结束拖拽：返回最终排序后的列表，清理临时数据 */
+    /**
+     * 结束拖拽：提交新顺序到 ListAdapter 并返回最终列表。
+     * dragOrderList 保持到 submitList 的 DiffUtil 完成后才清空，
+     * 防止中间 getItem() 回退到旧的 currentList。
+     */
     fun finishDragReorder(): List<SpeedDialItem> {
-        val result = dragOrderList ?: currentList
-        dragOrderList = null
+        val result = dragOrderList?.toList() ?: currentList.toList()
+        submitList(result) {
+            dragOrderList = null
+        }
         return result
+    }
+
+    var moveMode: Boolean = false
+        private set
+
+    fun enterMoveMode() {
+        if (moveMode) return
+        moveMode = true
+    }
+
+    fun exitMoveMode() {
+        if (!moveMode) return
+        moveMode = false
     }
 
     var batchDeleteMode: Boolean = false
@@ -147,19 +166,12 @@ class SpeedDialAdapter(
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         val isHighlighted = position == highlightPosition
         when {
-            isDragging && isHighlighted -> {
-                // 目标位置：放大突出，仿佛在"邀请"放入
-                holder.itemView.scaleX = 1.25f
-                holder.itemView.scaleY = 1.25f
+            isHighlighted -> {
+                // 合并目标：放大 + 高亮边框效果，提示"放手即合并"
+                holder.itemView.scaleX = 1.2f
+                holder.itemView.scaleY = 1.2f
                 holder.itemView.alpha = 1.0f
                 holder.itemView.translationZ = 16f
-            }
-            isDragging -> {
-                // 其他图标"害羞"地缩小变淡，让出视觉空间
-                holder.itemView.scaleX = 0.85f
-                holder.itemView.scaleY = 0.85f
-                holder.itemView.alpha = 0.4f
-                holder.itemView.translationZ = 0f
             }
             else -> {
                 holder.itemView.scaleX = 1.0f
@@ -201,18 +213,22 @@ class SpeedDialAdapter(
                 }
             }
 
-            // 长按：震动 + 浮起 + 立即启动拖拽
-            // 拖拽结束后由 DragHelper 判断：没移动就弹对话框，移动了就正常重排
             binding.root.setOnLongClickListener {
                 if (batchDeleteMode) return@setOnLongClickListener false
                 vibratePhone(binding.root.context)
-                binding.root.animate()
-                    .scaleX(1.1f)
-                    .scaleY(1.1f)
-                    .translationZ(12f)
-                    .setDuration(150)
-                    .start()
-                onStartDrag?.invoke(this)
+                if (moveMode) {
+                    // 移动模式：启动拖拽
+                    binding.root.animate()
+                        .scaleX(1.1f)
+                        .scaleY(1.1f)
+                        .translationZ(12f)
+                        .setDuration(150)
+                        .start()
+                    onStartDrag?.invoke(this)
+                } else {
+                    // 正常模式：弹出编辑/删除对话框
+                    onLongClickSite(bookmark)
+                }
                 true
             }
         }

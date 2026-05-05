@@ -1,32 +1,45 @@
 package com.swiftbrowser.ui.speeddial
 
+import android.os.Handler
+import android.os.Looper
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
 
 class SpeedDialDragHelper(
     private val adapter: SpeedDialAdapter,
-    private val onMergeSites: (drag: SpeedDialItem.Site, target: SpeedDialItem.Site) -> Unit,
-    private val onMoveToFolder: (drag: SpeedDialItem.Site, target: SpeedDialItem.Folder) -> Unit,
     private val onReorder: (reorderedList: List<SpeedDialItem>) -> Unit = {},
-    private val onNoMoveDragEnd: (SpeedDialItem) -> Unit = {}
+    private val onMerge: (drag: SpeedDialItem, target: SpeedDialItem) -> Unit = { _, _ -> }
 ) : ItemTouchHelper.Callback() {
 
-    private var dragFromPosition = -1
-    private var dropTargetPosition = -1
+    private var hasMoved = false
+
+    // 合并文件夹相关
+    private val handler = Handler(Looper.getMainLooper())
+    private var lastTargetPosition = -1       // 上次 onMove 的目标位置
+    private var pendingMergeItem: SpeedDialItem? = null  // 交换前记住的目标项
+    private var confirmedMergeItem: SpeedDialItem? = null // 停留超时后确认要合并的目标项
+    private val HOVER_DELAY = 600L
+
+    private val hoverRunnable = Runnable {
+        // 停留足够久，确认合并
+        confirmedMergeItem = pendingMergeItem
+        // 找到目标项当前位置并高亮
+        val list = adapter.getDisplayList()
+        val pos = list.indexOf(confirmedMergeItem)
+        if (pos >= 0) {
+            adapter.highlightPosition = pos
+        }
+    }
 
     override fun getMovementFlags(
         recyclerView: RecyclerView,
         viewHolder: RecyclerView.ViewHolder
     ): Int {
-        return if (viewHolder.itemViewType == SpeedDialAdapter.TYPE_SITE) {
-            makeMovementFlags(
-                ItemTouchHelper.UP or ItemTouchHelper.DOWN or
-                        ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT,
-                0
-            )
-        } else {
-            makeMovementFlags(0, 0)
-        }
+        return makeMovementFlags(
+            ItemTouchHelper.UP or ItemTouchHelper.DOWN or
+                    ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT,
+            0
+        )
     }
 
     override fun isLongPressDragEnabled(): Boolean = false
@@ -36,17 +49,33 @@ class SpeedDialDragHelper(
         source: RecyclerView.ViewHolder,
         target: RecyclerView.ViewHolder
     ): Boolean {
-        if (dragFromPosition == -1) {
-            dragFromPosition = source.bindingAdapterPosition
+        val from = source.bindingAdapterPosition
+        val to = target.bindingAdapterPosition
+        if (from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION) return false
+
+        if (confirmedMergeItem != null) {
+            // 已进入合并模式，不再交换，等松手
+            return true
         }
-        val targetPos = target.bindingAdapterPosition
-        // 实时交换数据，实现拖拽过程中位置重排预览
-        if (adapter.swapDragItems(dragFromPosition, targetPos)) {
-            // 交换后拖拽项的当前位置变了
-            dragFromPosition = targetPos
+
+        if (to == lastTargetPosition) {
+            // 仍在同一个目标上，等待计时器，不交换
+            return true
         }
-        dropTargetPosition = targetPos
-        adapter.highlightPosition = dropTargetPosition
+
+        // 移到新目标 → 重置合并计时
+        cancelHover()
+        lastTargetPosition = to
+
+        // 交换前记住目标项
+        pendingMergeItem = adapter.getDisplayList().getOrNull(to)
+
+        // 交换位置（实时预览）
+        adapter.swapDragItems(from, to)
+        hasMoved = true
+
+        // 开始合并计时
+        handler.postDelayed(hoverRunnable, HOVER_DELAY)
         return true
     }
 
@@ -54,81 +83,63 @@ class SpeedDialDragHelper(
 
     override fun onSelectedChanged(viewHolder: RecyclerView.ViewHolder?, actionState: Int) {
         super.onSelectedChanged(viewHolder, actionState)
-        if (actionState == ItemTouchHelper.ACTION_STATE_DRAG) {
-            viewHolder?.itemView?.apply {
-                alpha = 0.9f
+        if (actionState == ItemTouchHelper.ACTION_STATE_DRAG && viewHolder != null) {
+            viewHolder.itemView.apply {
+                alpha = 0.85f
                 scaleX = 1.15f
                 scaleY = 1.15f
-                elevation = 24f
             }
-            dragFromPosition = viewHolder?.bindingAdapterPosition ?: -1
-            dropTargetPosition = -1
+            hasMoved = false
+            confirmedMergeItem = null
+            pendingMergeItem = null
+            lastTargetPosition = -1
             adapter.startDragReorder()
-            adapter.isDragging = true
-            // 拖拽开始时通知所有视图刷新（害羞效果）
-            adapter.notifyItemRangeChanged(0, adapter.itemCount)
-        } else if (actionState == ItemTouchHelper.ACTION_STATE_IDLE) {
-            if (adapter.isDragging) {
-                adapter.isDragging = false
-                adapter.notifyItemRangeChanged(0, adapter.itemCount)
-            }
         }
     }
 
     override fun clearView(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
         super.clearView(recyclerView, viewHolder)
 
-        // 取消该 ViewHolder 上可能还在等待的长按计时器
-        adapter.cancelLongPressOnHolder(viewHolder)
+        // 先保存合并目标，再取消 hover（cancelHover 会清掉 confirmedMergeItem）
+        val mergeTarget = confirmedMergeItem
+        handler.removeCallbacks(hoverRunnable)
+        adapter.highlightPosition = -1
 
         viewHolder.itemView.apply {
             alpha = 1.0f
             scaleX = 1.0f
             scaleY = 1.0f
-            elevation = 0f
             translationZ = 0f
         }
 
-        adapter.isDragging = false
-        adapter.notifyItemRangeChanged(0, adapter.itemCount)
-        adapter.highlightPosition = -1
-
-        // 获取拖拽结束后的最终排序
         val finalList = adapter.finishDragReorder()
 
-        if (dragFromPosition >= 0 && dropTargetPosition >= 0 && dragFromPosition != dropTargetPosition) {
-            val dragItem = finalList.getOrNull(dragFromPosition)
-            val targetItem = finalList.getOrNull(dropTargetPosition)
-
-            if (dragItem is SpeedDialItem.Site && targetItem != null) {
-                when (targetItem) {
-                    is SpeedDialItem.Site -> {
-                        onMergeSites(dragItem, targetItem)
-                        dragFromPosition = -1
-                        dropTargetPosition = -1
-                        return
-                    }
-                    is SpeedDialItem.Folder -> {
-                        onMoveToFolder(dragItem, targetItem)
-                        dragFromPosition = -1
-                        dropTargetPosition = -1
-                        return
-                    }
-                }
+        if (mergeTarget != null) {
+            // 找到拖拽项（松手时 viewHolder 对应的位置）
+            val dragPos = viewHolder.bindingAdapterPosition.let {
+                if (it == RecyclerView.NO_POSITION) return@clearView else it
             }
+            val dragItem = finalList.getOrNull(dragPos)
+            if (dragItem != null && dragItem != mergeTarget) {
+                onMerge(dragItem, mergeTarget)
+            }
+        } else if (hasMoved) {
+            onReorder(finalList)
         }
 
-        if (dropTargetPosition == -1 && dragFromPosition >= 0) {
-            // 拖拽结束但没有移动到其他位置 → 弹出选项对话框
-            val item = finalList.getOrNull(dragFromPosition)
-            if (item != null) {
-                onNoMoveDragEnd(item)
-            }
+        hasMoved = false
+        confirmedMergeItem = null
+        pendingMergeItem = null
+        lastTargetPosition = -1
+    }
+
+    private fun cancelHover() {
+        handler.removeCallbacks(hoverRunnable)
+        pendingMergeItem = null
+        if (confirmedMergeItem != null) {
+            adapter.highlightPosition = -1
+            confirmedMergeItem = null
         }
-
-        onReorder(finalList)
-
-        dragFromPosition = -1
-        dropTargetPosition = -1
+        lastTargetPosition = -1
     }
 }

@@ -30,6 +30,13 @@ object FaviconProvider {
      */
     private val linkIconCache = LruCache<String, List<String>>(200)
 
+    /**
+     * 清除内存中的 link 图标缓存，配合 Glide 缓存清理实现完整刷新
+     */
+    fun clearLinkIconCache() {
+        linkIconCache.evictAll()
+    }
+
     // ==================== 域名提取 ====================
 
     private fun extractDomain(url: String): String? {

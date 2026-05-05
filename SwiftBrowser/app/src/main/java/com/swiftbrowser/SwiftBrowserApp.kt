@@ -3,6 +3,7 @@ package com.swiftbrowser
 import android.app.Application
 import com.swiftbrowser.data.database.AppDatabase
 import com.swiftbrowser.data.entity.Bookmark
+import com.swiftbrowser.sync.CloudSyncManager
 import com.swiftbrowser.sync.FirebaseSyncManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +17,9 @@ class SwiftBrowserApp : Application() {
     lateinit var syncManager: FirebaseSyncManager
         private set
 
+    lateinit var cloudSyncManager: CloudSyncManager
+        private set
+
     /** 快速拨号根文件夹的 ID，启动时自动创建 */
     var speedDialFolderId: Long = -1L
         private set
@@ -25,6 +29,7 @@ class SwiftBrowserApp : Application() {
         instance = this
         database = AppDatabase.getInstance(this)
         syncManager = FirebaseSyncManager(database.bookmarkDao())
+        cloudSyncManager = CloudSyncManager(database.bookmarkDao(), this)
 
         // 确保"快速拨号"根文件夹存在
         CoroutineScope(Dispatchers.IO).launch {

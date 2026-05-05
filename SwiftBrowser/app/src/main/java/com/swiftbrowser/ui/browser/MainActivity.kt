@@ -29,13 +29,13 @@ import com.swiftbrowser.R
 import com.swiftbrowser.SwiftBrowserApp
 import com.swiftbrowser.data.entity.Bookmark
 import com.swiftbrowser.databinding.ActivityMainBinding
-import com.swiftbrowser.sync.SyncResult
 import com.swiftbrowser.ui.auth.LoginActivity
 import com.swiftbrowser.ui.bookmark.BookmarkActivity
 import com.swiftbrowser.ui.history.HistoryActivity
 import com.swiftbrowser.ui.speeddial.SpeedDialAdapter
 import com.swiftbrowser.ui.speeddial.SpeedDialDragHelper
 import com.swiftbrowser.ui.speeddial.SpeedDialItem
+import com.swiftbrowser.util.FaviconProvider
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
@@ -47,13 +47,13 @@ class MainActivity : AppCompatActivity() {
     private val app get() = application as SwiftBrowserApp
     private val bookmarkDao get() = app.database.bookmarkDao()
     private val historyDao get() = app.database.historyDao()
-    private val syncManager get() = app.syncManager
+    private val cloudSync get() = app.cloudSyncManager
 
     // ==================== 多标签 ====================
     private val tabs = mutableListOf<Tab>()
     private var activeTab: Tab? = null
     private var isShowingWebView = false
-    private var autoSyncJob: kotlinx.coroutines.Job? = null
+    private var isReordering = false
     private lateinit var tabAdapter: TabAdapter
 
     // 当前标签的快捷访问
@@ -77,7 +77,6 @@ class MainActivity : AppCompatActivity() {
         setupMenuButton()
         setupTabManager()
         setupSwipeRefresh()
-        startAutoSync()
 
         // 创建第一个标签
         createNewTab()
@@ -87,7 +86,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        autoSyncJob?.cancel()
         for (tab in tabs) {
             tab.webView?.destroy()
         }
@@ -395,11 +393,16 @@ class MainActivity : AppCompatActivity() {
             adapter = speedDialAdapter
         }
 
-        // 批量删除模式下，点击空白区域退出
+        // 点击空白区域退出批量删除或移动模式
         binding.rvSpeedDial.setOnTouchListener { view, event ->
-            if (event.action == MotionEvent.ACTION_DOWN && speedDialAdapter.batchDeleteMode) {
+            if (event.action == MotionEvent.ACTION_DOWN) {
                 if (binding.rvSpeedDial.findChildViewUnder(event.x, event.y) == null) {
-                    speedDialAdapter.exitBatchDeleteMode()
+                    if (speedDialAdapter.batchDeleteMode) {
+                        speedDialAdapter.exitBatchDeleteMode()
+                    }
+                    if (speedDialAdapter.moveMode) {
+                        exitMoveMode()
+                    }
                 }
             }
             false
@@ -407,46 +410,60 @@ class MainActivity : AppCompatActivity() {
 
         val dragCallback = SpeedDialDragHelper(
             adapter = speedDialAdapter,
-            onMergeSites = { dragItem, targetItem ->
-                lifecycleScope.launch {
-                    val sdFolderId = app.speedDialFolderId
-                    val maxPos = bookmarkDao.getMaxPosition(sdFolderId) ?: -1
-                    val newFolderId = bookmarkDao.insert(
-                        Bookmark(
-                            title = targetItem.bookmark.title,
-                            isFolder = true,
-                            parentId = sdFolderId,
-                            position = maxPos + 1
-                        )
-                    )
-                    bookmarkDao.moveTo(targetItem.bookmark.id, newFolderId)
-                    bookmarkDao.moveTo(dragItem.bookmark.id, newFolderId)
-                }
-            },
-            onMoveToFolder = { dragItem, targetFolder ->
-                lifecycleScope.launch {
-                    bookmarkDao.moveTo(dragItem.bookmark.id, targetFolder.folder.id)
-                }
-            },
             onReorder = { reorderedList ->
+                isReordering = true
                 lifecycleScope.launch {
-                    reorderedList.forEachIndexed { index, item ->
-                        when (item) {
-                            is SpeedDialItem.Site ->
-                                if (item.bookmark.position != index)
-                                    bookmarkDao.update(item.bookmark.copy(position = index))
-                            is SpeedDialItem.Folder ->
-                                if (item.folder.position != index)
-                                    bookmarkDao.update(item.folder.copy(position = index))
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        app.database.runInTransaction {
+                            kotlinx.coroutines.runBlocking {
+                                reorderedList.forEachIndexed { index, item ->
+                                    val id = when (item) {
+                                        is SpeedDialItem.Site -> item.bookmark.id
+                                        is SpeedDialItem.Folder -> item.folder.id
+                                    }
+                                    bookmarkDao.updatePosition(id, index)
+                                }
+                            }
                         }
                     }
+                    isReordering = false
                 }
             },
-            onNoMoveDragEnd = { item ->
-                // 长按浮起后没有移动 → 弹出编辑/删除对话框
-                when (item) {
-                    is SpeedDialItem.Site -> showSpeedDialSiteOptions(item.bookmark)
-                    is SpeedDialItem.Folder -> showFolderOptions(item.folder)
+            onMerge = { dragItem, targetItem ->
+                lifecycleScope.launch {
+                    val sdFolderId = app.speedDialFolderId
+                    when {
+                        // 两个站点 → 创建新文件夹
+                        dragItem is SpeedDialItem.Site && targetItem is SpeedDialItem.Site -> {
+                            val maxPos = bookmarkDao.getMaxPosition(sdFolderId) ?: -1
+                            val newFolderId = bookmarkDao.insert(
+                                Bookmark(
+                                    title = targetItem.bookmark.title,
+                                    isFolder = true,
+                                    parentId = sdFolderId,
+                                    position = maxPos + 1
+                                )
+                            )
+                            bookmarkDao.moveTo(targetItem.bookmark.id, newFolderId)
+                            bookmarkDao.moveTo(dragItem.bookmark.id, newFolderId)
+                        }
+                        // 站点拖到文件夹上 → 移入文件夹
+                        dragItem is SpeedDialItem.Site && targetItem is SpeedDialItem.Folder -> {
+                            bookmarkDao.moveTo(dragItem.bookmark.id, targetItem.folder.id)
+                        }
+                        // 文件夹拖到站点上 → 把站点移入文件夹
+                        dragItem is SpeedDialItem.Folder && targetItem is SpeedDialItem.Site -> {
+                            bookmarkDao.moveTo(targetItem.bookmark.id, dragItem.folder.id)
+                        }
+                        // 两个文件夹 → 把一个文件夹的内容移到另一个
+                        dragItem is SpeedDialItem.Folder && targetItem is SpeedDialItem.Folder -> {
+                            val children = bookmarkDao.getChildrenList(dragItem.folder.id)
+                            for (child in children) {
+                                bookmarkDao.moveTo(child.id, targetItem.folder.id)
+                            }
+                            bookmarkDao.deleteById(dragItem.folder.id)
+                        }
+                    }
                 }
             }
         )
@@ -457,42 +474,44 @@ class MainActivity : AppCompatActivity() {
         observeSpeedDial()
     }
 
+    private var speedDialObserverFolderId: Long = -1L
+    private var speedDialLiveData: androidx.lifecycle.LiveData<List<Bookmark>>? = null
+
     private fun observeSpeedDial() {
         lifecycleScope.launch {
             while (app.speedDialFolderId == -1L) {
                 kotlinx.coroutines.delay(100)
             }
+            attachSpeedDialObserver(app.speedDialFolderId)
+        }
+    }
 
-            val sdFolderId = app.speedDialFolderId
+    private fun attachSpeedDialObserver(sdFolderId: Long) {
+        if (sdFolderId == speedDialObserverFolderId) return
+        // 移除旧的观察者
+        speedDialLiveData?.removeObservers(this)
+        speedDialObserverFolderId = sdFolderId
 
-            bookmarkDao.getChildren(sdFolderId).observe(this@MainActivity) { children ->
-                lifecycleScope.launch {
-                    val items = mutableListOf<SpeedDialItem>()
+        speedDialLiveData = bookmarkDao.getChildren(sdFolderId)
+        speedDialLiveData!!.observe(this) { children ->
+            if (isReordering) return@observe
+            lifecycleScope.launch {
+                val items = mutableListOf<SpeedDialItem>()
 
-                    for (child in children) {
-                        if (child.isFolder) {
-                            val grandChildren = bookmarkDao.getChildrenList(child.id)
-                            if (grandChildren.size == 1) {
-                                bookmarkDao.moveTo(grandChildren[0].id, sdFolderId)
-                                bookmarkDao.delete(child)
-                                return@launch
-                            } else if (grandChildren.isEmpty()) {
-                                bookmarkDao.delete(child)
-                                return@launch
-                            } else {
-                                items.add(SpeedDialItem.Folder(child, grandChildren))
-                            }
-                        } else {
-                            items.add(SpeedDialItem.Site(child))
-                        }
+                for (child in children) {
+                    if (child.isFolder) {
+                        val grandChildren = bookmarkDao.getChildrenList(child.id)
+                        items.add(SpeedDialItem.Folder(child, grandChildren))
+                    } else {
+                        items.add(SpeedDialItem.Site(child))
                     }
-
-                    speedDialAdapter.submitList(items)
-                    binding.tvEmptySpeedDial.visibility =
-                        if (items.isEmpty()) View.VISIBLE else View.GONE
-                    binding.rvSpeedDial.visibility =
-                        if (items.isEmpty()) View.GONE else View.VISIBLE
                 }
+
+                speedDialAdapter.submitList(items)
+                binding.tvEmptySpeedDial.visibility =
+                    if (items.isEmpty()) View.VISIBLE else View.GONE
+                binding.rvSpeedDial.visibility =
+                    if (items.isEmpty()) View.GONE else View.VISIBLE
             }
         }
     }
@@ -594,11 +613,11 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val children = bookmarkDao.getChildrenList(openFolderId)
             if (children.isEmpty()) {
-                bookmarkDao.getById(openFolderId)?.let { bookmarkDao.delete(it) }
+                bookmarkDao.getById(openFolderId)?.let { bookmarkDao.deleteById(it.id) }
                 closeFolderOverlay()
             } else if (children.size == 1) {
                 bookmarkDao.moveTo(children[0].id, app.speedDialFolderId)
-                bookmarkDao.getById(openFolderId)?.let { bookmarkDao.delete(it) }
+                bookmarkDao.getById(openFolderId)?.let { bookmarkDao.deleteById(it.id) }
                 closeFolderOverlay()
             } else {
                 folderAdapter.submitList(children.map { SpeedDialItem.Site(it) })
@@ -665,18 +684,26 @@ class MainActivity : AppCompatActivity() {
     private fun confirmDeleteFolder(folder: Bookmark) {
         AlertDialog.Builder(this, R.style.DialogTheme)
             .setTitle(R.string.confirm_delete)
-            .setMessage(getString(R.string.delete_folder_message, folder.title))
+            .setMessage("确定要删除「${folder.title}」文件夹及其所有内容吗？\n此操作不可撤销。")
             .setPositiveButton(R.string.delete) { _, _ ->
                 lifecycleScope.launch {
-                    val children = bookmarkDao.getChildrenList(folder.id)
-                    for (child in children) {
-                        bookmarkDao.moveTo(child.id, app.speedDialFolderId)
-                    }
-                    bookmarkDao.delete(folder)
+                    deleteFolderRecursive(folder.id)
                 }
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
+    }
+
+    /** 递归删除文件夹及其所有子内容 */
+    private suspend fun deleteFolderRecursive(folderId: Long) {
+        val children = bookmarkDao.getChildrenList(folderId)
+        for (child in children) {
+            if (child.isFolder) {
+                deleteFolderRecursive(child.id)
+            }
+            bookmarkDao.deleteById(child.id)
+        }
+        bookmarkDao.deleteById(folderId)
     }
 
     private fun showEditBookmarkDialog(bookmark: Bookmark) {
@@ -745,7 +772,7 @@ class MainActivity : AppCompatActivity() {
             popup.menuInflater.inflate(R.menu.main_menu, popup.menu)
 
             val loginItem = popup.menu.findItem(R.id.action_login)
-            loginItem.title = if (syncManager.isLoggedIn) getString(R.string.sign_out)
+            loginItem.title = if (cloudSync.isLoggedIn) getString(R.string.sign_out)
             else getString(R.string.sign_in)
 
             popup.setOnMenuItemClickListener { item ->
@@ -774,17 +801,25 @@ class MainActivity : AppCompatActivity() {
                         }
                         true
                     }
+                    R.id.action_move_mode -> {
+                        enterMoveMode()
+                        true
+                    }
                     R.id.action_batch_delete -> {
                         speedDialAdapter.enterBatchDeleteMode()
                         true
                     }
-                    R.id.action_sync -> {
-                        performSync()
+                    R.id.action_upload -> {
+                        performUpload()
+                        true
+                    }
+                    R.id.action_download -> {
+                        performDownload()
                         true
                     }
                     R.id.action_login -> {
-                        if (syncManager.isLoggedIn) {
-                            com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
+                        if (cloudSync.isLoggedIn) {
+                            cloudSync.logout()
                             Toast.makeText(this, "已退出登录", Toast.LENGTH_SHORT).show()
                         } else {
                             startActivity(Intent(this, LoginActivity::class.java))
@@ -798,10 +833,44 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun enterMoveMode() {
+        speedDialAdapter.enterMoveMode()
+        binding.tvMoveMode.visibility = View.VISIBLE
+        binding.swipeRefresh.isEnabled = false
+        Toast.makeText(this, "已进入移动模式，长按图标拖拽排序", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun exitMoveMode() {
+        speedDialAdapter.exitMoveMode()
+        binding.tvMoveMode.visibility = View.GONE
+        binding.swipeRefresh.isEnabled = true
+    }
+
     private fun setupSwipeRefresh() {
         binding.swipeRefresh.isEnabled = false
         binding.swipeRefresh.setOnRefreshListener {
-            activeTab?.webView?.reload()
+            if (isShowingWebView) {
+                activeTab?.webView?.reload()
+            } else {
+                refreshSpeedDialIcons()
+            }
+        }
+    }
+
+    private fun refreshSpeedDialIcons() {
+        lifecycleScope.launch {
+            // 清除 Glide 磁盘缓存（必须在 IO 线程）
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.bumptech.glide.Glide.get(this@MainActivity).clearDiskCache()
+            }
+            // 清除 Glide 内存缓存（必须在主线程）
+            com.bumptech.glide.Glide.get(this@MainActivity).clearMemory()
+            // 清除 FaviconProvider 的 link 图标缓存
+            FaviconProvider.clearLinkIconCache()
+            // 通知适配器重新绑定所有项，触发图标重新加载
+            speedDialAdapter.notifyDataSetChanged()
+            binding.swipeRefresh.isRefreshing = false
+            Toast.makeText(this@MainActivity, "图标已刷新", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -818,6 +887,7 @@ class MainActivity : AppCompatActivity() {
         binding.webViewContainer.visibility = View.VISIBLE
         binding.speedDialContainer.visibility = View.GONE
         binding.swipeRefresh.isEnabled = activeTab?.webView?.scrollY == 0
+        if (speedDialAdapter.moveMode) exitMoveMode()
         hideTabOverlay()
     }
 
@@ -825,7 +895,7 @@ class MainActivity : AppCompatActivity() {
         isShowingWebView = false
         binding.webViewContainer.visibility = View.GONE
         binding.speedDialContainer.visibility = View.VISIBLE
-        binding.swipeRefresh.isEnabled = false
+        binding.swipeRefresh.isEnabled = true
         binding.etUrl.setText("")
         hideTabOverlay()
     }
@@ -871,40 +941,46 @@ class MainActivity : AppCompatActivity() {
             .setMessage(getString(R.string.confirm_delete_message, bookmark.title))
             .setPositiveButton(R.string.delete) { _, _ ->
                 lifecycleScope.launch {
-                    bookmarkDao.delete(bookmark)
-                    bookmark.firebaseId?.let { syncManager.deleteFromCloud(it) }
+                    bookmarkDao.deleteById(bookmark.id)
                 }
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
     }
 
-    private fun startAutoSync() {
-        autoSyncJob = lifecycleScope.launch {
-            while (true) {
-                kotlinx.coroutines.delay(60_000)
-                if (syncManager.isLoggedIn) {
-                    syncManager.syncAll()
-                }
-            }
-        }
-    }
-
-    private fun performSync() {
-        if (!syncManager.isLoggedIn) {
+    private fun performUpload() {
+        if (!cloudSync.isLoggedIn) {
             Toast.makeText(this, R.string.please_login, Toast.LENGTH_SHORT).show()
             startActivity(Intent(this, LoginActivity::class.java))
             return
         }
-        Toast.makeText(this, R.string.syncing, Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, R.string.uploading, Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
-            when (val result = syncManager.syncAll()) {
-                is SyncResult.Success ->
-                    Toast.makeText(this@MainActivity, R.string.sync_success, Toast.LENGTH_SHORT).show()
-                is SyncResult.NotLoggedIn ->
-                    Toast.makeText(this@MainActivity, R.string.please_login, Toast.LENGTH_SHORT).show()
-                is SyncResult.Error ->
-                    Toast.makeText(this@MainActivity, getString(R.string.sync_failed, result.message), Toast.LENGTH_LONG).show()
+            try {
+                cloudSync.uploadBookmarks()
+                Toast.makeText(this@MainActivity, R.string.upload_success, Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this@MainActivity, getString(R.string.sync_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun performDownload() {
+        if (!cloudSync.isLoggedIn) {
+            Toast.makeText(this, R.string.please_login, Toast.LENGTH_SHORT).show()
+            startActivity(Intent(this, LoginActivity::class.java))
+            return
+        }
+        Toast.makeText(this, R.string.downloading, Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            try {
+                cloudSync.downloadBookmarks()
+                // 下载后刷新快速拨号
+                app.ensureSpeedDialFolder()
+                attachSpeedDialObserver(app.speedDialFolderId)
+                Toast.makeText(this@MainActivity, R.string.download_success, Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this@MainActivity, getString(R.string.sync_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -913,7 +989,9 @@ class MainActivity : AppCompatActivity() {
 
     @Deprecated("Use OnBackPressedCallback")
     override fun onBackPressed() {
-        if (speedDialAdapter.batchDeleteMode) {
+        if (speedDialAdapter.moveMode) {
+            exitMoveMode()
+        } else if (speedDialAdapter.batchDeleteMode) {
             speedDialAdapter.exitBatchDeleteMode()
         } else if (binding.tabOverlay.visibility == View.VISIBLE) {
             hideTabOverlay()

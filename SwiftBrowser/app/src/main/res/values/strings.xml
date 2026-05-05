@@ -5,7 +5,12 @@
     <string name="speed_dial">快速拨号</string>
     <string name="sign_in">登录</string>
     <string name="sign_out">退出登录</string>
-    <string name="sync">同步</string>
+    <string name="sync">上传到云端</string>
+    <string name="download_from_cloud">从云端下载</string>
+    <string name="upload_success">上传成功</string>
+    <string name="download_success">下载成功</string>
+    <string name="uploading">正在上传…</string>
+    <string name="downloading">正在下载…</string>
     <string name="add_bookmark">添加书签</string>
     <string name="add_speed_dial">添加快速拨号</string>
     <string name="delete">删除</string>
@@ -42,4 +47,7 @@
     <string name="delete_folder">删除文件夹</string>
     <string name="delete_folder_message">删除文件夹"%s"？\n文件夹内的快速拨号将移回首页</string>
     <string name="no_folder">不归组（留在首页）</string>
+    <string name="import_bookmarks">导入Chrome书签</string>
+    <string name="import_success">成功导入 %d 个书签</string>
+    <string name="import_cancelled">已取消导入</string>
 </resources>

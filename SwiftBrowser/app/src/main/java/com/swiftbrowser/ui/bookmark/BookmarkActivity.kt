@@ -1,12 +1,15 @@
 package com.swiftbrowser.ui.bookmark
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import android.widget.EditText
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.LiveData
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -15,7 +18,9 @@ import com.swiftbrowser.R
 import com.swiftbrowser.SwiftBrowserApp
 import com.swiftbrowser.data.entity.Bookmark
 import com.swiftbrowser.databinding.ActivityBookmarkBinding
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class BookmarkActivity : AppCompatActivity() {
 
@@ -24,11 +29,26 @@ class BookmarkActivity : AppCompatActivity() {
 
     private val app get() = application as SwiftBrowserApp
     private val bookmarkDao get() = app.database.bookmarkDao()
-    private val syncManager get() = app.syncManager
 
     // 文件夹导航栈
     private val folderStack = mutableListOf<Bookmark?>() // null = 根目录
     private val currentFolder: Bookmark? get() = folderStack.lastOrNull()
+
+    /** 判断是否为快速拨号根文件夹（需保护，不可在根目录层删除） */
+    private fun isSpeedDialFolder(bookmark: Bookmark): Boolean {
+        if (!bookmark.isFolder) return false
+        if (bookmark.id == app.speedDialFolderId && app.speedDialFolderId != -1L) return true
+        return bookmark.title == Bookmark.SPEED_DIAL_FOLDER_NAME && bookmark.parentId == null
+    }
+
+    // 当前活跃的 LiveData，用于在切换文件夹时移除旧观察者
+    private var currentLiveData: LiveData<List<Bookmark>>? = null
+
+    // 文件选择器：导入 Chrome 书签
+    private val importFileLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            uri?.let { parseAndImportBookmarks(it) }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,6 +59,8 @@ class BookmarkActivity : AppCompatActivity() {
 
         setupToolbar()
         setupRecyclerView()
+        setupImportButton()
+        setupBatchActionBar()
         loadCurrentFolder()
     }
 
@@ -52,6 +74,11 @@ class BookmarkActivity : AppCompatActivity() {
             }
         }
 
+        // 新建文件夹按钮
+        binding.btnNewFolder.setOnClickListener {
+            showNewFolderDialog()
+        }
+
         // 点击标题：在子文件夹内时重命名当前文件夹
         binding.tvToolbarTitle.setOnClickListener {
             val folder = currentFolder
@@ -60,9 +87,18 @@ class BookmarkActivity : AppCompatActivity() {
             }
         }
 
-        // 长按标题可以新建文件夹
+        // 长按标题弹出操作菜单
         binding.tvToolbarTitle.setOnLongClickListener {
-            showNewFolderDialog()
+            val options = arrayOf("新建文件夹", "多选删除")
+            AlertDialog.Builder(this, R.style.DialogTheme)
+                .setTitle(currentFolder?.title ?: getString(R.string.bookmarks))
+                .setItems(options) { _, which ->
+                    when (options[which]) {
+                        "新建文件夹" -> showNewFolderDialog()
+                        "多选删除" -> enterBatchDeleteMode()
+                    }
+                }
+                .show()
             true
         }
     }
@@ -89,7 +125,11 @@ class BookmarkActivity : AppCompatActivity() {
             },
             onLongClick = { bookmark ->
                 showItemOptions(bookmark)
-            }
+            },
+            onSelectionChanged = { count ->
+                binding.tvBatchCount.text = "已选择 $count 项"
+            },
+            isProtected = { bookmark -> isSpeedDialFolder(bookmark) }
         )
 
         binding.rvBookmarks.layoutManager = LinearLayoutManager(this)
@@ -102,6 +142,9 @@ class BookmarkActivity : AppCompatActivity() {
         // 更新标题
         binding.tvToolbarTitle.text = folder?.title ?: getString(R.string.bookmarks)
 
+        // 移除旧观察者，防止多次 observe 导致观察者堆积
+        currentLiveData?.removeObservers(this)
+
         // 加载子项
         val liveData = if (folder != null) {
             bookmarkDao.getChildren(folder.id)
@@ -109,6 +152,7 @@ class BookmarkActivity : AppCompatActivity() {
             bookmarkDao.getRootItems()
         }
 
+        currentLiveData = liveData
         liveData.observe(this) { items ->
             adapter.submitList(items)
             binding.tvEmpty.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
@@ -122,15 +166,21 @@ class BookmarkActivity : AppCompatActivity() {
         val options = mutableListOf<String>()
         if (bookmark.isFolder) {
             options.add("重命名")
-            options.add("删除文件夹")
+            options.add("复制文件夹到...")
+            // 快速拨号根文件夹不允许删除
+            if (!isSpeedDialFolder(bookmark)) {
+                options.add("删除文件夹")
+            }
         } else {
             options.add("移动到文件夹")
+            options.add("复制到文件夹")
             // 如果在子文件夹中，显示"移出文件夹"
             if (currentFolder != null) {
                 options.add("移出到上级")
             }
             options.add("删除")
         }
+        options.add("多选删除")
 
         AlertDialog.Builder(this, R.style.DialogTheme)
             .setTitle(bookmark.title)
@@ -140,12 +190,15 @@ class BookmarkActivity : AppCompatActivity() {
                     "重命名" -> showRenameDialog(bookmark)
                     "删除文件夹" -> confirmDeleteFolder(bookmark)
                     "移动到文件夹" -> showMoveToFolderDialog(bookmark)
+                    "复制到文件夹" -> showCopyToFolderDialog(bookmark)
+                    "复制文件夹到..." -> showCopyToFolderDialog(bookmark)
                     "移出到上级" -> {
                         lifecycleScope.launch {
                             bookmarkDao.moveTo(bookmark.id, currentFolder?.parentId)
                         }
                     }
                     "删除" -> confirmDelete(bookmark)
+                    "多选删除" -> enterBatchDeleteMode(bookmark)
                 }
             }
             .show()
@@ -236,6 +289,109 @@ class BookmarkActivity : AppCompatActivity() {
         }
     }
 
+    // ==================== 复制到文件夹 ====================
+
+    private fun showCopyToFolderDialog(bookmark: Bookmark) {
+        lifecycleScope.launch {
+            val rootItems = bookmarkDao.getRootItemsList()
+            val folders = rootItems.filter { it.isFolder && it.id != bookmark.id }
+
+            val currentFolderId = currentFolder?.id
+
+            val targetNames = mutableListOf<String>()
+            val targetIds = mutableListOf<Long?>() // null = 根目录
+
+            // 第一项：根目录
+            if (currentFolder != null) {
+                targetNames.add("根目录")
+                targetIds.add(null)
+            }
+
+            // 所有可选文件夹（排除当前所在文件夹，避免原地复制）
+            for (folder in folders) {
+                if (folder.id != currentFolderId) {
+                    targetNames.add(folder.title)
+                    targetIds.add(folder.id)
+                }
+            }
+
+            if (targetNames.isEmpty()) {
+                Toast.makeText(this@BookmarkActivity, "没有可用的目标", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+
+            runOnUiThread {
+                AlertDialog.Builder(this@BookmarkActivity, R.style.DialogTheme)
+                    .setTitle("复制到文件夹")
+                    .setItems(targetNames.toTypedArray()) { _, which ->
+                        lifecycleScope.launch {
+                            val targetId = targetIds[which]
+                            if (bookmark.isFolder) {
+                                copyFolderRecursive(bookmark.id, targetId)
+                            } else {
+                                copyBookmarkTo(bookmark, targetId)
+                            }
+                            Toast.makeText(
+                                this@BookmarkActivity,
+                                "已复制到目标文件夹",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+            }
+        }
+    }
+
+    /** 复制单个书签到目标文件夹 */
+    private suspend fun copyBookmarkTo(bookmark: Bookmark, targetParentId: Long?) {
+        val maxPos = if (targetParentId != null) {
+            bookmarkDao.getMaxPosition(targetParentId) ?: -1
+        } else {
+            bookmarkDao.getMaxPositionRoot() ?: -1
+        }
+        bookmarkDao.insert(
+            Bookmark(
+                title = bookmark.title,
+                url = bookmark.url,
+                isFolder = false,
+                parentId = targetParentId,
+                position = maxPos + 1,
+                favicon = bookmark.favicon
+            )
+        )
+    }
+
+    /** 递归复制文件夹及其所有内容到目标文件夹 */
+    private suspend fun copyFolderRecursive(sourceFolderId: Long, targetParentId: Long?): Long {
+        val source = bookmarkDao.getById(sourceFolderId) ?: return -1L
+        val maxPos = if (targetParentId != null) {
+            bookmarkDao.getMaxPosition(targetParentId) ?: -1
+        } else {
+            bookmarkDao.getMaxPositionRoot() ?: -1
+        }
+        // 创建新文件夹
+        val newFolderId = bookmarkDao.insert(
+            Bookmark(
+                title = source.title,
+                isFolder = true,
+                parentId = targetParentId,
+                position = maxPos + 1
+            )
+        )
+        // 递归复制子项
+        val children = bookmarkDao.getChildrenList(sourceFolderId)
+        for (child in children) {
+            if (child.isFolder) {
+                copyFolderRecursive(child.id, newFolderId)
+            } else {
+                copyBookmarkTo(child, newFolderId)
+            }
+        }
+        return newFolderId
+    }
+
     // ==================== 重命名 ====================
 
     private fun showRenameDialog(bookmark: Bookmark) {
@@ -273,8 +429,7 @@ class BookmarkActivity : AppCompatActivity() {
             .setMessage(getString(R.string.confirm_delete_message, bookmark.title))
             .setPositiveButton(R.string.delete) { _, _ ->
                 lifecycleScope.launch {
-                    bookmarkDao.delete(bookmark)
-                    bookmark.firebaseId?.let { syncManager.deleteFromCloud(it) }
+                    bookmarkDao.deleteById(bookmark.id)
                     Toast.makeText(
                         this@BookmarkActivity,
                         R.string.bookmark_deleted,
@@ -287,28 +442,286 @@ class BookmarkActivity : AppCompatActivity() {
     }
 
     private fun confirmDeleteFolder(folder: Bookmark) {
+        if (isSpeedDialFolder(folder)) {
+            Toast.makeText(this, "快速拨号文件夹不可删除", Toast.LENGTH_SHORT).show()
+            return
+        }
         AlertDialog.Builder(this, R.style.DialogTheme)
             .setTitle(R.string.confirm_delete)
-            .setMessage(getString(R.string.delete_folder_message, folder.title))
+            .setMessage("确定要删除「${folder.title}」文件夹及其所有内容吗？\n此操作不可撤销。")
             .setPositiveButton(R.string.delete) { _, _ ->
                 lifecycleScope.launch {
-                    // 子项移到上一级
-                    val children = bookmarkDao.getChildrenList(folder.id)
-                    for (child in children) {
-                        bookmarkDao.moveTo(child.id, folder.parentId)
-                    }
-                    bookmarkDao.delete(folder)
+                    deleteFolderRecursive(folder.id)
+                    Toast.makeText(
+                        this@BookmarkActivity,
+                        R.string.bookmark_deleted,
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
     }
 
+    /** 递归删除文件夹及其所有子内容 */
+    private suspend fun deleteFolderRecursive(folderId: Long) {
+        val children = bookmarkDao.getChildrenList(folderId)
+        for (child in children) {
+            if (child.isFolder) {
+                deleteFolderRecursive(child.id)
+            }
+            bookmarkDao.deleteById(child.id)
+        }
+        bookmarkDao.deleteById(folderId)
+    }
+
+    // ==================== 批量删除 ====================
+
+    private fun setupBatchActionBar() {
+        binding.btnBatchSelectAll.setOnClickListener { adapter.selectAll() }
+        binding.btnBatchDelete.setOnClickListener { confirmBatchDelete() }
+        binding.btnBatchCancel.setOnClickListener { exitBatchDeleteMode() }
+    }
+
+    private fun enterBatchDeleteMode(initialBookmark: Bookmark? = null) {
+        adapter.enterBatchDeleteMode()
+        if (initialBookmark != null) {
+            adapter.toggleSelection(initialBookmark)
+        }
+        binding.batchActionBar.visibility = View.VISIBLE
+        binding.btnImport.visibility = View.GONE
+        binding.btnNewFolder.visibility = View.GONE
+    }
+
+    private fun exitBatchDeleteMode() {
+        adapter.exitBatchDeleteMode()
+        binding.batchActionBar.visibility = View.GONE
+        binding.btnImport.visibility = View.VISIBLE
+        binding.btnNewFolder.visibility = View.VISIBLE
+    }
+
+    private fun confirmBatchDelete() {
+        val selected = adapter.getSelectedBookmarks()
+        if (selected.isEmpty()) {
+            Toast.makeText(this, "请先选择要删除的书签", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val folderCount = selected.count { it.isFolder && !isSpeedDialFolder(it) }
+        val message = if (folderCount > 0) {
+            "确定要删除选中的 ${selected.size} 个书签（含 $folderCount 个文件夹）吗？\n文件夹及其所有内容将被彻底删除，此操作不可撤销。"
+        } else {
+            "确定要删除选中的 ${selected.size} 个书签吗？"
+        }
+
+        AlertDialog.Builder(this, R.style.DialogTheme)
+            .setTitle(R.string.confirm_delete)
+            .setMessage(message)
+            .setPositiveButton(R.string.delete) { _, _ ->
+                lifecycleScope.launch {
+                    for (bookmark in selected) {
+                        // 跳过快速拨号根文件夹
+                        if (isSpeedDialFolder(bookmark)) continue
+                        if (bookmark.isFolder) {
+                            deleteFolderRecursive(bookmark.id)
+                        } else {
+                            bookmarkDao.deleteById(bookmark.id)
+                        }
+                    }
+                    exitBatchDeleteMode()
+                    Toast.makeText(
+                        this@BookmarkActivity,
+                        "已删除 ${selected.size} 个书签",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    // ==================== 导入 Chrome 书签 ====================
+
+    private fun setupImportButton() {
+        binding.btnImport.setOnClickListener {
+            importFileLauncher.launch(arrayOf("text/html", "*/*"))
+        }
+    }
+
+    private fun parseAndImportBookmarks(uri: Uri) {
+        lifecycleScope.launch {
+            try {
+                val inputStream = contentResolver.openInputStream(uri)
+                val html = inputStream?.bufferedReader()?.readText() ?: return@launch
+                inputStream.close()
+
+                val parentId = currentFolder?.id
+                val imported = withContext(Dispatchers.IO) {
+                    val rootItems = parseChromeBookmarks(html)
+                    insertParsedItems(rootItems, parentId)
+                }
+
+                Toast.makeText(
+                    this@BookmarkActivity,
+                    getString(R.string.import_success, imported),
+                    Toast.LENGTH_SHORT
+                ).show()
+            } catch (e: Exception) {
+                Toast.makeText(
+                    this@BookmarkActivity,
+                    "导入失败: ${e.message}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    /**
+     * 解析 Chrome 导出的书签 HTML。
+     * 使用栈式状态机：遇到 H3 创建文件夹，遇到 <DL> 进入子层级，遇到 </DL> 返回上级。
+     */
+    private fun parseChromeBookmarks(html: String): List<ParsedBookmark> {
+        val root = mutableListOf<ParsedBookmark>()
+        val stack = mutableListOf(root) // 栈顶是当前正在填充的列表
+        var pendingFolder: ParsedBookmark? = null // 最近创建的文件夹，等待 <DL> 进入
+
+        val lines = html.lines()
+        var started = false
+
+        for (line in lines) {
+            // 跳过直到第一个 <DL>（根列表开始）
+            if (!started) {
+                if (line.contains("<DL", ignoreCase = true)) {
+                    started = true
+                }
+                continue
+            }
+
+            val trimmed = line.trim()
+
+            // 开启子列表：将 pendingFolder 的 children 入栈
+            if (trimmed.contains("<DL", ignoreCase = true) &&
+                !trimmed.contains("</DL>", ignoreCase = true)) {
+                val folder = pendingFolder
+                if (folder != null) {
+                    stack.add(folder.children)
+                    pendingFolder = null
+                }
+                continue
+            }
+
+            // 关闭当前列表层级
+            if (trimmed.contains("</DL>", ignoreCase = true)) {
+                if (stack.size > 1) {
+                    stack.removeLast()
+                }
+                continue
+            }
+
+            // 文件夹：<DT><H3 ...>Name</H3>
+            if (trimmed.contains("<H3", ignoreCase = true)) {
+                val name = extractTagContent(trimmed, "H3")
+                if (name.isNotEmpty()) {
+                    val folder = ParsedBookmark(title = name, isFolder = true)
+                    stack.last().add(folder)
+                    pendingFolder = folder
+                }
+                continue
+            }
+
+            // 书签：<DT><A HREF="..." ...>Name</A>
+            if (trimmed.contains("<A ", ignoreCase = true)) {
+                val href = Regex("HREF=\"([^\"]*)\"", RegexOption.IGNORE_CASE)
+                    .find(trimmed)?.groupValues?.getOrNull(1)
+                val icon = Regex("ICON=\"([^\"]*)\"", RegexOption.IGNORE_CASE)
+                    .find(trimmed)?.groupValues?.getOrNull(1)
+                val name = extractTagContent(trimmed, "A")
+
+                if (!href.isNullOrBlank()) {
+                    stack.last().add(
+                        ParsedBookmark(
+                            title = name.ifBlank { href },
+                            url = href,
+                            isFolder = false,
+                            favicon = icon
+                        )
+                    )
+                }
+            }
+        }
+
+        return root
+    }
+
+    /** 从 HTML 行中提取标签内容，例如 <H3 ...>Name</H3> → "Name" */
+    private fun extractTagContent(line: String, tag: String): String {
+        val closeTag = "</$tag>"
+        val endIndex = line.indexOf(closeTag)
+        if (endIndex < 0) return ""
+        val beforeClose = line.substring(0, endIndex)
+        val startIndex = beforeClose.lastIndexOf('>')
+        if (startIndex < 0) return ""
+        return beforeClose.substring(startIndex + 1).trim()
+    }
+
+    /**
+     * 递归插入解析后的书签数据到数据库。
+     */
+    private suspend fun insertParsedItems(
+        items: List<ParsedBookmark>,
+        parentId: Long?
+    ): Int {
+        var count = 0
+        for (item in items) {
+            if (item.isFolder) {
+                val maxPos = if (parentId != null) {
+                    bookmarkDao.getMaxPosition(parentId) ?: -1
+                } else {
+                    bookmarkDao.getMaxPositionRoot() ?: -1
+                }
+                val folderId = bookmarkDao.insert(
+                    Bookmark(
+                        title = item.title,
+                        isFolder = true,
+                        parentId = parentId,
+                        position = maxPos + 1
+                    )
+                )
+                count++
+                count += insertParsedItems(item.children, folderId)
+            } else {
+                if (item.url.isNullOrBlank()) continue
+                // 跳过重复的 URL
+                val existing = bookmarkDao.getByUrl(item.url)
+                if (existing == null) {
+                    val maxPos = if (parentId != null) {
+                        bookmarkDao.getMaxPosition(parentId) ?: -1
+                    } else {
+                        bookmarkDao.getMaxPositionRoot() ?: -1
+                    }
+                    bookmarkDao.insert(
+                        Bookmark(
+                            title = item.title,
+                            url = item.url,
+                            favicon = item.favicon,
+                            parentId = parentId,
+                            position = maxPos + 1
+                        )
+                    )
+                    count++
+                }
+            }
+        }
+        return count
+    }
+
     // ==================== 返回键 ====================
 
     @Deprecated("Use OnBackPressedCallback")
     override fun onBackPressed() {
-        if (folderStack.size > 1) {
+        if (adapter.batchDeleteMode) {
+            exitBatchDeleteMode()
+        } else if (folderStack.size > 1) {
             folderStack.removeLast()
             loadCurrentFolder()
         } else {
@@ -316,3 +729,12 @@ class BookmarkActivity : AppCompatActivity() {
         }
     }
 }
+
+/** Chrome 书签解析中间数据结构 */
+private data class ParsedBookmark(
+    val title: String,
+    val url: String? = null,
+    val isFolder: Boolean = false,
+    val favicon: String? = null,
+    val children: MutableList<ParsedBookmark> = mutableListOf()
+)
