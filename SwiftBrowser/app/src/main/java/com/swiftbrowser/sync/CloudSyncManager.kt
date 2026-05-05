@@ -136,6 +136,46 @@ class CloudSyncManager(
         }
     }
 
+    // ==================== 获取云端书签列表（仅读取，不覆盖本地） ====================
+
+    data class CloudBookmark(
+        val title: String,
+        val url: String?,
+        val isFolder: Boolean,
+        val parentIndex: Int?,
+        val position: Int,
+        val favicon: String?,
+        val createdAt: Long
+    )
+
+    suspend fun fetchCloudBookmarks(): List<CloudBookmark> = withContext(Dispatchers.IO) {
+        val response = get("/api/bookmarks/download")
+        if (response.code != 200) {
+            val error = try { JSONObject(response.body).optString("error", "获取失败") } catch (e: Exception) { "获取失败" }
+            throw Exception(error)
+        }
+
+        val json = JSONObject(response.body)
+        val bookmarksArray = json.getJSONArray("bookmarks")
+        val result = mutableListOf<CloudBookmark>()
+
+        for (i in 0 until bookmarksArray.length()) {
+            val obj = bookmarksArray.getJSONObject(i)
+            result.add(
+                CloudBookmark(
+                    title = obj.optString("title", ""),
+                    url = obj.optStringOrNull("url"),
+                    isFolder = obj.optBoolean("isFolder", false),
+                    parentIndex = if (obj.isNull("parentId")) null else obj.getInt("parentId"),
+                    position = obj.optInt("position", 0),
+                    favicon = obj.optStringOrNull("favicon"),
+                    createdAt = obj.optLong("createdAt", System.currentTimeMillis())
+                )
+            )
+        }
+        result
+    }
+
     // ==================== 网络请求 ====================
 
     private fun post(path: String, body: String, auth: Boolean): HttpResponse {

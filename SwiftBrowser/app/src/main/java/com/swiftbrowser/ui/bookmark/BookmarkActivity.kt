@@ -4,7 +4,9 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.EditText
+import android.widget.ListView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -18,6 +20,7 @@ import com.swiftbrowser.R
 import com.swiftbrowser.SwiftBrowserApp
 import com.swiftbrowser.data.entity.Bookmark
 import com.swiftbrowser.databinding.ActivityBookmarkBinding
+import com.swiftbrowser.sync.CloudSyncManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -72,6 +75,11 @@ class BookmarkActivity : AppCompatActivity() {
             } else {
                 finish()
             }
+        }
+
+        // 与云端比较按钮
+        binding.btnCompare.setOnClickListener {
+            compareWithCloud()
         }
 
         // 新建文件夹按钮
@@ -494,6 +502,7 @@ class BookmarkActivity : AppCompatActivity() {
         binding.batchActionBar.visibility = View.VISIBLE
         binding.btnImport.visibility = View.GONE
         binding.btnNewFolder.visibility = View.GONE
+        binding.btnCompare.visibility = View.GONE
     }
 
     private fun exitBatchDeleteMode() {
@@ -501,6 +510,7 @@ class BookmarkActivity : AppCompatActivity() {
         binding.batchActionBar.visibility = View.GONE
         binding.btnImport.visibility = View.VISIBLE
         binding.btnNewFolder.visibility = View.VISIBLE
+        binding.btnCompare.visibility = View.VISIBLE
     }
 
     private fun confirmBatchDelete() {
@@ -540,6 +550,225 @@ class BookmarkActivity : AppCompatActivity() {
                 }
             }
             .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    // ==================== 与云端比较 ====================
+
+    private fun compareWithCloud() {
+        val cloudSync = app.cloudSyncManager
+        if (!cloudSync.isLoggedIn) {
+            Toast.makeText(this, "请先登录云端账号", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        lifecycleScope.launch {
+            try {
+                Toast.makeText(this@BookmarkActivity, "正在获取云端数据...", Toast.LENGTH_SHORT).show()
+
+                val cloudBookmarks = withContext(Dispatchers.IO) { cloudSync.fetchCloudBookmarks() }
+                val localBookmarks = bookmarkDao.getAllList()
+
+                // 用 URL 作为非文件夹书签的唯一标识进行比较
+                val localUrls = localBookmarks.filter { !it.isFolder && it.url != null }
+                    .map { it.url!! }.toSet()
+                val cloudUrls = cloudBookmarks.filter { !it.isFolder && it.url != null }
+                    .map { it.url!! }.toSet()
+
+                // 本地有、云端没有的
+                val onlyLocal = localBookmarks.filter {
+                    !it.isFolder && it.url != null && it.url !in cloudUrls
+                }
+                // 云端有、本地没有的
+                val onlyCloud = cloudBookmarks.filter {
+                    !it.isFolder && it.url != null && it.url !in localUrls
+                }
+
+                runOnUiThread {
+                    showCompareResultDialog(onlyLocal, onlyCloud)
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this@BookmarkActivity, "比较失败: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    /** 比较结果中的条目 */
+    private data class CompareItem(
+        val title: String,
+        val url: String,
+        val isLocal: Boolean, // true=本地独有, false=云端独有
+        val localBookmark: Bookmark? = null,
+        val cloudBookmark: CloudSyncManager.CloudBookmark? = null
+    )
+
+    private fun showCompareResultDialog(
+        onlyLocal: List<Bookmark>,
+        onlyCloud: List<CloudSyncManager.CloudBookmark>
+    ) {
+        if (onlyLocal.isEmpty() && onlyCloud.isEmpty()) {
+            Toast.makeText(this, "本地与云端书签完全一致", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val items = mutableListOf<CompareItem>()
+        for (b in onlyLocal) {
+            items.add(CompareItem(
+                title = b.title,
+                url = b.url!!,
+                isLocal = true,
+                localBookmark = b
+            ))
+        }
+        for (b in onlyCloud) {
+            items.add(CompareItem(
+                title = b.title,
+                url = b.url!!,
+                isLocal = false,
+                cloudBookmark = b
+            ))
+        }
+
+        val displayItems = items.map { item ->
+            val prefix = if (item.isLocal) "【本地独有】" else "【云端独有】"
+            "$prefix ${item.title}"
+        }
+
+        val listView = ListView(this).apply {
+            adapter = ArrayAdapter(
+                this@BookmarkActivity,
+                android.R.layout.simple_list_item_1,
+                displayItems
+            )
+            setOnItemLongClickListener { _, _, position, _ ->
+                showCompareItemOptions(items[position])
+                true
+            }
+        }
+
+        val titleText = "本地独有: ${onlyLocal.size} 项 | 云端独有: ${onlyCloud.size} 项"
+
+        val dialogView = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            addView(listView, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+            ))
+
+            // 底部按钮栏
+            val btnBar = android.widget.LinearLayout(this@BookmarkActivity).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                setPadding(16, 8, 16, 8)
+
+                val btnUpload = android.widget.Button(this@BookmarkActivity).apply {
+                    text = "同步到云端"
+                    layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                }
+                val btnDownload = android.widget.Button(this@BookmarkActivity).apply {
+                    text = "同步到本地"
+                    layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                }
+
+                btnUpload.setOnClickListener {
+                    performUploadSync()
+                }
+                btnDownload.setOnClickListener {
+                    performDownloadSync()
+                }
+
+                addView(btnUpload)
+                addView(btnDownload)
+            }
+            addView(btnBar)
+        }
+
+        AlertDialog.Builder(this, R.style.DialogTheme)
+            .setTitle(titleText)
+            .setView(dialogView)
+            .setNegativeButton("关闭", null)
+            .show()
+    }
+
+    private fun performUploadSync() {
+        val cloudSync = app.cloudSyncManager
+        if (!cloudSync.isLoggedIn) {
+            Toast.makeText(this, "请先登录云端账号", Toast.LENGTH_SHORT).show()
+            return
+        }
+        Toast.makeText(this, "正在上传...", Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) { cloudSync.uploadBookmarks() }
+                Toast.makeText(this@BookmarkActivity, "上传成功", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this@BookmarkActivity, "上传失败: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun performDownloadSync() {
+        val cloudSync = app.cloudSyncManager
+        if (!cloudSync.isLoggedIn) {
+            Toast.makeText(this, "请先登录云端账号", Toast.LENGTH_SHORT).show()
+            return
+        }
+        Toast.makeText(this, "正在下载...", Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) { cloudSync.downloadBookmarks() }
+                Toast.makeText(this@BookmarkActivity, "下载成功", Toast.LENGTH_SHORT).show()
+                loadCurrentFolder()
+            } catch (e: Exception) {
+                Toast.makeText(this@BookmarkActivity, "下载失败: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun showCompareItemOptions(item: CompareItem) {
+        val options = if (item.isLocal) {
+            arrayOf("从本地删除")
+        } else {
+            arrayOf("下载到本地")
+        }
+
+        AlertDialog.Builder(this, R.style.DialogTheme)
+            .setTitle(item.title)
+            .setItems(options) { _, which ->
+                when (options[which]) {
+                    "从本地删除" -> {
+                        item.localBookmark?.let { bookmark ->
+                            lifecycleScope.launch {
+                                bookmarkDao.deleteById(bookmark.id)
+                                Toast.makeText(this@BookmarkActivity, "已从本地删除", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                    "下载到本地" -> {
+                        item.cloudBookmark?.let { cloud ->
+                            lifecycleScope.launch {
+                                val parentId = currentFolder?.id
+                                val maxPos = if (parentId != null) {
+                                    bookmarkDao.getMaxPosition(parentId) ?: -1
+                                } else {
+                                    bookmarkDao.getMaxPositionRoot() ?: -1
+                                }
+                                bookmarkDao.insert(
+                                    Bookmark(
+                                        title = cloud.title,
+                                        url = cloud.url,
+                                        isFolder = false,
+                                        parentId = parentId,
+                                        position = maxPos + 1,
+                                        favicon = cloud.favicon
+                                    )
+                                )
+                                Toast.makeText(this@BookmarkActivity, "已下载到本地", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
+            }
             .show()
     }
 

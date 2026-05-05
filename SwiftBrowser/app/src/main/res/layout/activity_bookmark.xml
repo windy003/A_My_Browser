@@ -37,6 +37,15 @@
             android:textStyle="bold" />
 
         <ImageButton
+            android:id="@+id/btnCompare"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="与云端比较"
+            android:src="@drawable/ic_sync"
+            android:tint="@color/white" />
+
+        <ImageButton
             android:id="@+id/btnNewFolder"
             android:layout_width="48dp"
             android:layout_height="48dp"
