@@ -61,6 +61,10 @@ interface BookmarkDao {
     @Query("DELETE FROM bookmarks WHERE id = :id")
     suspend fun deleteById(id: Long)
 
+    /** 批量更新位置（拖拽排序后一次性写入） */
+    @Query("UPDATE bookmarks SET position = :position WHERE id = :id")
+    suspend fun updatePosition(id: Long, position: Int)
+
     /** 移动到某个文件夹 */
     @Query("UPDATE bookmarks SET parentId = :parentId WHERE id = :id")
     suspend fun moveTo(id: Long, parentId: Long?)

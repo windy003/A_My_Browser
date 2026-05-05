@@ -111,6 +111,17 @@
                 android:textSize="16sp"
                 android:visibility="gone" />
 
+            <TextView
+                android:id="@+id/tvMoveMode"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:background="@color/primary"
+                android:gravity="center"
+                android:text="移动模式 — 长按拖拽图标排序，点击空白区域退出"
+                android:textColor="@color/white"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
         </LinearLayout>
 
         <!-- 文件夹浮层 -->
