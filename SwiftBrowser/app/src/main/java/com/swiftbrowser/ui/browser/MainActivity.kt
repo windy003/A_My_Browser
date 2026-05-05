@@ -809,14 +809,6 @@ class MainActivity : AppCompatActivity() {
                         speedDialAdapter.enterBatchDeleteMode()
                         true
                     }
-                    R.id.action_upload -> {
-                        performUpload()
-                        true
-                    }
-                    R.id.action_download -> {
-                        performDownload()
-                        true
-                    }
                     R.id.action_login -> {
                         if (cloudSync.isLoggedIn) {
                             cloudSync.logout()
@@ -948,42 +940,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun performUpload() {
-        if (!cloudSync.isLoggedIn) {
-            Toast.makeText(this, R.string.please_login, Toast.LENGTH_SHORT).show()
-            startActivity(Intent(this, LoginActivity::class.java))
-            return
-        }
-        Toast.makeText(this, R.string.uploading, Toast.LENGTH_SHORT).show()
-        lifecycleScope.launch {
-            try {
-                cloudSync.uploadBookmarks()
-                Toast.makeText(this@MainActivity, R.string.upload_success, Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) {
-                Toast.makeText(this@MainActivity, getString(R.string.sync_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun performDownload() {
-        if (!cloudSync.isLoggedIn) {
-            Toast.makeText(this, R.string.please_login, Toast.LENGTH_SHORT).show()
-            startActivity(Intent(this, LoginActivity::class.java))
-            return
-        }
-        Toast.makeText(this, R.string.downloading, Toast.LENGTH_SHORT).show()
-        lifecycleScope.launch {
-            try {
-                cloudSync.downloadBookmarks()
-                // 下载后刷新快速拨号
-                app.ensureSpeedDialFolder()
-                attachSpeedDialObserver(app.speedDialFolderId)
-                Toast.makeText(this@MainActivity, R.string.download_success, Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) {
-                Toast.makeText(this@MainActivity, getString(R.string.sync_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
-            }
-        }
-    }
 
     // ==================== 返回键 ====================
 

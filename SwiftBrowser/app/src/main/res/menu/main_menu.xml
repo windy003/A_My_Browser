@@ -17,14 +17,6 @@
         android:icon="@drawable/ic_add"
         android:title="@string/add_speed_dial" />
     <item
-        android:id="@+id/action_upload"
-        android:icon="@drawable/ic_sync"
-        android:title="@string/sync" />
-    <item
-        android:id="@+id/action_download"
-        android:icon="@drawable/ic_sync"
-        android:title="@string/download_from_cloud" />
-    <item
         android:id="@+id/action_move_mode"
         android:icon="@drawable/ic_move"
         android:title="移动模式" />
