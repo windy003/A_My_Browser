@@ -172,6 +172,7 @@ class BookmarkActivity : AppCompatActivity() {
                 options.add("删除文件夹")
             }
         } else {
+            options.add("重命名")
             options.add("移动到文件夹")
             options.add("复制到文件夹")
             // 如果在子文件夹中，显示"移出文件夹"
@@ -400,8 +401,10 @@ class BookmarkActivity : AppCompatActivity() {
             setPadding(60, 40, 60, 20)
         }
 
+        val dialogTitle = if (bookmark.isFolder) R.string.rename_folder else R.string.rename_bookmark
+
         AlertDialog.Builder(this, R.style.DialogTheme)
-            .setTitle(R.string.rename_folder)
+            .setTitle(dialogTitle)
             .setView(input)
             .setPositiveButton(R.string.save) { _, _ ->
                 val newName = input.text.toString().trim()

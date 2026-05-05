@@ -44,6 +44,7 @@
     <string name="move_to_folder">移入文件夹</string>
     <string name="remove_from_folder">移出文件夹</string>
     <string name="rename_folder">重命名文件夹</string>
+    <string name="rename_bookmark">重命名书签</string>
     <string name="delete_folder">删除文件夹</string>
     <string name="delete_folder_message">删除文件夹"%s"？\n文件夹内的快速拨号将移回首页</string>
     <string name="no_folder">不归组（留在首页）</string>
