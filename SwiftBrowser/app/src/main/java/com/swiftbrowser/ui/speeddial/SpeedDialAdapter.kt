@@ -163,10 +163,6 @@ class SpeedDialAdapter(
         super.onBindViewHolder(holder, position, payloads)
     }
 
-    fun cancelLongPressOnHolder(holder: RecyclerView.ViewHolder) {
-        // no-op：长按状态由 DragHelper 管理
-    }
-
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         when (val item = getItem(position)) {
             is SpeedDialItem.Site -> (holder as SiteViewHolder).bind(item.bookmark)
