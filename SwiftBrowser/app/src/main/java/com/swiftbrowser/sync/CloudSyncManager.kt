@@ -139,6 +139,7 @@ class CloudSyncManager(
     // ==================== 获取云端书签列表（仅读取，不覆盖本地） ====================
 
     data class CloudBookmark(
+        val id: Int,
         val title: String,
         val url: String?,
         val isFolder: Boolean,
@@ -163,6 +164,7 @@ class CloudSyncManager(
             val obj = bookmarksArray.getJSONObject(i)
             result.add(
                 CloudBookmark(
+                    id = obj.getInt("id"),
                     title = obj.optString("title", ""),
                     url = obj.optStringOrNull("url"),
                     isFolder = obj.optBoolean("isFolder", false),
@@ -174,6 +176,16 @@ class CloudSyncManager(
             )
         }
         result
+    }
+
+    // ==================== 删除单条云端书签 ====================
+
+    suspend fun deleteCloudBookmark(cloudId: Int) = withContext(Dispatchers.IO) {
+        val response = delete("/api/bookmarks/$cloudId")
+        if (response.code != 200) {
+            val error = try { JSONObject(response.body).optString("error", "删除失败") } catch (e: Exception) { "删除失败" }
+            throw Exception(error)
+        }
     }
 
     // ==================== 网络请求 ====================
@@ -190,6 +202,16 @@ class CloudSyncManager(
             readTimeout = 10000
         }
         conn.outputStream.use { it.write(body.toByteArray()) }
+        return readResponse(conn)
+    }
+
+    private fun delete(path: String): HttpResponse {
+        val conn = (URL(BASE_URL + path).openConnection() as HttpURLConnection).apply {
+            requestMethod = "DELETE"
+            setRequestProperty("Authorization", "Bearer ${getToken()}")
+            connectTimeout = 10000
+            readTimeout = 10000
+        }
         return readResponse(conn)
     }
 

@@ -25,6 +25,11 @@ export default {
       if (path === '/api/bookmarks/download' && request.method === 'GET') {
         return withAuth(request, env, handleDownload);
       }
+      // 删除单条云端书签
+      if (path.startsWith('/api/bookmarks/') && request.method === 'DELETE') {
+        const id = path.split('/').pop();
+        return withAuth(request, env, (req, env, userId) => handleDeleteOne(req, env, userId, id));
+      }
 
       return json({ error: 'Not Found' }, 404);
     } catch (e) {
@@ -102,6 +107,22 @@ async function handleUpload(request, env, userId) {
   }
 
   return json({ success: true, count: bookmarks.length });
+}
+
+async function handleDeleteOne(request, env, userId, bookmarkId) {
+  const id = parseInt(bookmarkId);
+  if (isNaN(id)) {
+    return json({ error: '无效的书签ID' }, 400);
+  }
+
+  const result = await env.DB.prepare('DELETE FROM bookmarks WHERE id = ? AND user_id = ?')
+    .bind(id, userId).run();
+
+  if (result.meta.changes === 0) {
+    return json({ error: '书签不存在或无权删除' }, 404);
+  }
+
+  return json({ success: true });
 }
 
 async function handleDownload(request, env, userId) {
@@ -199,7 +220,7 @@ function json(data, status = 200) {
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization'
   };
 }

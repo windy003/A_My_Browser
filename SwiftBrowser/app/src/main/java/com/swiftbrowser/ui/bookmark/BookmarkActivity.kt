@@ -729,7 +729,7 @@ class BookmarkActivity : AppCompatActivity() {
         val options = if (item.isLocal) {
             arrayOf("从本地删除")
         } else {
-            arrayOf("下载到本地")
+            arrayOf("下载到本地", "从云端删除")
         }
 
         AlertDialog.Builder(this, R.style.DialogTheme)
@@ -764,6 +764,20 @@ class BookmarkActivity : AppCompatActivity() {
                                     )
                                 )
                                 Toast.makeText(this@BookmarkActivity, "已下载到本地", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                    "从云端删除" -> {
+                        item.cloudBookmark?.let { cloud ->
+                            lifecycleScope.launch {
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        app.cloudSyncManager.deleteCloudBookmark(cloud.id)
+                                    }
+                                    Toast.makeText(this@BookmarkActivity, "已从云端删除", Toast.LENGTH_SHORT).show()
+                                } catch (e: Exception) {
+                                    Toast.makeText(this@BookmarkActivity, "删除失败: ${e.message}", Toast.LENGTH_LONG).show()
+                                }
                             }
                         }
                     }
