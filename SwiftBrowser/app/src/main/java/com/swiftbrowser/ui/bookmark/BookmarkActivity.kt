@@ -87,10 +87,10 @@ class BookmarkActivity : AppCompatActivity() {
             showNewFolderDialog()
         }
 
-        // 点击标题：在子文件夹内时重命名当前文件夹
+        // 点击标题：在子文件夹内时重命名当前文件夹（快速拨号文件夹除外）
         binding.tvToolbarTitle.setOnClickListener {
             val folder = currentFolder
-            if (folder != null) {
+            if (folder != null && !isSpeedDialFolder(folder)) {
                 showRenameDialog(folder)
             }
         }
@@ -158,7 +158,9 @@ class BookmarkActivity : AppCompatActivity() {
     private fun showItemOptions(bookmark: Bookmark) {
         val options = mutableListOf<String>()
         if (bookmark.isFolder) {
-            options.add("重命名")
+            if (!isSpeedDialFolder(bookmark)) {
+                options.add("重命名")
+            }
             options.add("复制文件夹到...")
             // 快速拨号根文件夹不允许删除
             if (!isSpeedDialFolder(bookmark)) {
@@ -389,6 +391,10 @@ class BookmarkActivity : AppCompatActivity() {
     // ==================== 重命名 ====================
 
     private fun showRenameDialog(bookmark: Bookmark) {
+        if (isSpeedDialFolder(bookmark)) {
+            Toast.makeText(this, "快速拨号文件夹不可重命名", Toast.LENGTH_SHORT).show()
+            return
+        }
         val input = EditText(this).apply {
             setText(bookmark.title)
             setPadding(60, 40, 60, 20)
