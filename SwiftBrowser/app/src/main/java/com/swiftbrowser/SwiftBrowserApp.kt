@@ -4,7 +4,6 @@ import android.app.Application
 import com.swiftbrowser.data.database.AppDatabase
 import com.swiftbrowser.data.entity.Bookmark
 import com.swiftbrowser.sync.CloudSyncManager
-import com.swiftbrowser.sync.FirebaseSyncManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -12,9 +11,6 @@ import kotlinx.coroutines.launch
 class SwiftBrowserApp : Application() {
 
     lateinit var database: AppDatabase
-        private set
-
-    lateinit var syncManager: FirebaseSyncManager
         private set
 
     lateinit var cloudSyncManager: CloudSyncManager
@@ -28,7 +24,6 @@ class SwiftBrowserApp : Application() {
         super.onCreate()
         instance = this
         database = AppDatabase.getInstance(this)
-        syncManager = FirebaseSyncManager(database.bookmarkDao())
         cloudSyncManager = CloudSyncManager(database.bookmarkDao(), this)
 
         // 确保"快速拨号"根文件夹存在
