@@ -20,7 +20,6 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
-import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.PagerSnapHelper
@@ -76,7 +75,6 @@ class MainActivity : AppCompatActivity() {
         setupBottomBar()
         setupMenuButton()
         setupTabManager()
-        setupSwipeRefresh()
 
         // 创建第一个标签
         createNewTab()
@@ -305,8 +303,7 @@ class MainActivity : AppCompatActivity() {
                     if (tab == activeTab) {
                         binding.etUrl.setText(url)
                         binding.progressBar.visibility = View.GONE
-                        binding.swipeRefresh.isRefreshing = false
-                    }
+                                    }
                     // 记录历史
                     if (url != null && url != "about:blank") {
                         lifecycleScope.launch {
@@ -364,11 +361,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            setOnScrollChangeListener { _, _, scrollY, _, _ ->
-                if (this == activeTab?.webView) {
-                    binding.swipeRefresh.isEnabled = scrollY == 0
-                }
-            }
         }
     }
 
@@ -402,6 +394,9 @@ class MainActivity : AppCompatActivity() {
                     }
                     if (speedDialAdapter.moveMode) {
                         exitMoveMode()
+                    }
+                    if (speedDialAdapter.folderMode) {
+                        exitFolderMode()
                     }
                 }
             }
@@ -455,7 +450,7 @@ class MainActivity : AppCompatActivity() {
                         dragItem is SpeedDialItem.Folder && targetItem is SpeedDialItem.Site -> {
                             bookmarkDao.moveTo(targetItem.bookmark.id, dragItem.folder.id)
                         }
-                        // 两个文件夹 → 把一个文件夹的内容移到另一个
+                        // 两个文件夹 → 合并
                         dragItem is SpeedDialItem.Folder && targetItem is SpeedDialItem.Folder -> {
                             val children = bookmarkDao.getChildrenList(dragItem.folder.id)
                             for (child in children) {
@@ -501,7 +496,15 @@ class MainActivity : AppCompatActivity() {
                 for (child in children) {
                     if (child.isFolder) {
                         val grandChildren = bookmarkDao.getChildrenList(child.id)
-                        items.add(SpeedDialItem.Folder(child, grandChildren))
+                        if (grandChildren.size == 1) {
+                            // 文件夹只剩一个条目，自动移出到快速拨号根目录并删除空文件夹
+                            val only = grandChildren[0]
+                            bookmarkDao.moveTo(only.id, sdFolderId)
+                            bookmarkDao.deleteById(child.id)
+                            items.add(SpeedDialItem.Site(only))
+                        } else {
+                            items.add(SpeedDialItem.Folder(child, grandChildren))
+                        }
                     } else {
                         items.add(SpeedDialItem.Site(child))
                     }
@@ -777,6 +780,14 @@ class MainActivity : AppCompatActivity() {
 
             popup.setOnMenuItemClickListener { item ->
                 when (item.itemId) {
+                    R.id.action_refresh -> {
+                        if (isShowingWebView) {
+                            activeTab?.webView?.reload()
+                        } else {
+                            refreshSpeedDialIcons()
+                        }
+                        true
+                    }
                     R.id.action_bookmarks -> {
                         startActivity(Intent(this, BookmarkActivity::class.java))
                         true
@@ -805,6 +816,10 @@ class MainActivity : AppCompatActivity() {
                         enterMoveMode()
                         true
                     }
+                    R.id.action_move_to_folder -> {
+                        enterFolderMode()
+                        true
+                    }
                     R.id.action_batch_delete -> {
                         speedDialAdapter.enterBatchDeleteMode()
                         true
@@ -827,26 +842,29 @@ class MainActivity : AppCompatActivity() {
 
     private fun enterMoveMode() {
         speedDialAdapter.enterMoveMode()
+        binding.tvMoveMode.text = "移动模式 — 长按图标拖拽排序，点击空白区域退出"
         binding.tvMoveMode.visibility = View.VISIBLE
-        binding.swipeRefresh.isEnabled = false
         Toast.makeText(this, "已进入移动模式，长按图标拖拽排序", Toast.LENGTH_SHORT).show()
     }
 
     private fun exitMoveMode() {
         speedDialAdapter.exitMoveMode()
         binding.tvMoveMode.visibility = View.GONE
-        binding.swipeRefresh.isEnabled = true
     }
 
-    private fun setupSwipeRefresh() {
-        binding.swipeRefresh.isEnabled = false
-        binding.swipeRefresh.setOnRefreshListener {
-            if (isShowingWebView) {
-                activeTab?.webView?.reload()
-            } else {
-                refreshSpeedDialIcons()
-            }
-        }
+
+    // ==================== 移入文件夹模式 ====================
+
+    private fun enterFolderMode() {
+        speedDialAdapter.enterFolderMode()
+        binding.tvMoveMode.text = "移入文件夹模式 — 长按图标拖到另一个图标上松手，点击空白退出"
+        binding.tvMoveMode.visibility = View.VISIBLE
+        Toast.makeText(this, "已进入移入文件夹模式", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun exitFolderMode() {
+        speedDialAdapter.exitFolderMode()
+        binding.tvMoveMode.visibility = View.GONE
     }
 
     private fun refreshSpeedDialIcons() {
@@ -861,7 +879,6 @@ class MainActivity : AppCompatActivity() {
             FaviconProvider.clearLinkIconCache()
             // 通知适配器重新绑定所有项，触发图标重新加载
             speedDialAdapter.notifyDataSetChanged()
-            binding.swipeRefresh.isRefreshing = false
             Toast.makeText(this@MainActivity, "图标已刷新", Toast.LENGTH_SHORT).show()
         }
     }
@@ -878,8 +895,8 @@ class MainActivity : AppCompatActivity() {
         isShowingWebView = true
         binding.webViewContainer.visibility = View.VISIBLE
         binding.speedDialContainer.visibility = View.GONE
-        binding.swipeRefresh.isEnabled = activeTab?.webView?.scrollY == 0
         if (speedDialAdapter.moveMode) exitMoveMode()
+        if (speedDialAdapter.folderMode) exitFolderMode()
         hideTabOverlay()
     }
 
@@ -887,7 +904,6 @@ class MainActivity : AppCompatActivity() {
         isShowingWebView = false
         binding.webViewContainer.visibility = View.GONE
         binding.speedDialContainer.visibility = View.VISIBLE
-        binding.swipeRefresh.isEnabled = true
         binding.etUrl.setText("")
         hideTabOverlay()
     }
@@ -947,6 +963,8 @@ class MainActivity : AppCompatActivity() {
     override fun onBackPressed() {
         if (speedDialAdapter.moveMode) {
             exitMoveMode()
+        } else if (speedDialAdapter.folderMode) {
+            exitFolderMode()
         } else if (speedDialAdapter.batchDeleteMode) {
             speedDialAdapter.exitBatchDeleteMode()
         } else if (binding.tabOverlay.visibility == View.VISIBLE) {

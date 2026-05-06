@@ -48,13 +48,6 @@ class SpeedDialAdapter(
         return dragOrderList?.getOrNull(position) ?: super.getItem(position)
     }
 
-    var highlightPosition: Int = -1
-        set(value) {
-            val old = field
-            field = value
-            if (old >= 0 && old < itemCount) notifyItemChanged(old)
-            if (value >= 0 && value < itemCount) notifyItemChanged(value)
-        }
 
     var isDragging: Boolean = false
 
@@ -87,9 +80,7 @@ class SpeedDialAdapter(
      */
     fun finishDragReorder(): List<SpeedDialItem> {
         val result = dragOrderList?.toList() ?: currentList.toList()
-        submitList(result) {
-            dragOrderList = null
-        }
+        dragOrderList = null
         return result
     }
 
@@ -104,6 +95,19 @@ class SpeedDialAdapter(
     fun exitMoveMode() {
         if (!moveMode) return
         moveMode = false
+    }
+
+    var folderMode: Boolean = false
+        private set
+
+    fun enterFolderMode() {
+        if (folderMode) return
+        folderMode = true
+    }
+
+    fun exitFolderMode() {
+        if (!folderMode) return
+        folderMode = false
     }
 
     var batchDeleteMode: Boolean = false
@@ -164,23 +168,6 @@ class SpeedDialAdapter(
     }
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
-        val isHighlighted = position == highlightPosition
-        when {
-            isHighlighted -> {
-                // 合并目标：放大 + 高亮边框效果，提示"放手即合并"
-                holder.itemView.scaleX = 1.2f
-                holder.itemView.scaleY = 1.2f
-                holder.itemView.alpha = 1.0f
-                holder.itemView.translationZ = 16f
-            }
-            else -> {
-                holder.itemView.scaleX = 1.0f
-                holder.itemView.scaleY = 1.0f
-                holder.itemView.alpha = 1.0f
-                holder.itemView.translationZ = 0f
-            }
-        }
-
         when (val item = getItem(position)) {
             is SpeedDialItem.Site -> (holder as SiteViewHolder).bind(item.bookmark)
             is SpeedDialItem.Folder -> (holder as FolderViewHolder).bind(item.folder, item.children)
@@ -216,8 +203,8 @@ class SpeedDialAdapter(
             binding.root.setOnLongClickListener {
                 if (batchDeleteMode) return@setOnLongClickListener false
                 vibratePhone(binding.root.context)
-                if (moveMode) {
-                    // 移动模式：启动拖拽
+                if (moveMode || folderMode) {
+                    // 移动模式或文件夹模式：启动拖拽
                     binding.root.animate()
                         .scaleX(1.1f)
                         .scaleY(1.1f)

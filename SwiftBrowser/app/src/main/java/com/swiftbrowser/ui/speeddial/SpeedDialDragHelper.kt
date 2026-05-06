@@ -1,7 +1,5 @@
 package com.swiftbrowser.ui.speeddial
 
-import android.os.Handler
-import android.os.Looper
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
 
@@ -13,23 +11,9 @@ class SpeedDialDragHelper(
 
     private var hasMoved = false
 
-    // 合并文件夹相关
-    private val handler = Handler(Looper.getMainLooper())
-    private var lastTargetPosition = -1       // 上次 onMove 的目标位置
-    private var pendingMergeItem: SpeedDialItem? = null  // 交换前记住的目标项
-    private var confirmedMergeItem: SpeedDialItem? = null // 停留超时后确认要合并的目标项
-    private val HOVER_DELAY = 600L
-
-    private val hoverRunnable = Runnable {
-        // 停留足够久，确认合并
-        confirmedMergeItem = pendingMergeItem
-        // 找到目标项当前位置并高亮
-        val list = adapter.getDisplayList()
-        val pos = list.indexOf(confirmedMergeItem)
-        if (pos >= 0) {
-            adapter.highlightPosition = pos
-        }
-    }
+    // 文件夹模式：拖到图标上方合并，不交换位置
+    private var folderMergeTarget: SpeedDialItem? = null
+    private var folderMergeTargetPos: Int = -1
 
     override fun getMovementFlags(
         recyclerView: RecyclerView,
@@ -53,29 +37,24 @@ class SpeedDialDragHelper(
         val to = target.bindingAdapterPosition
         if (from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION) return false
 
-        if (confirmedMergeItem != null) {
-            // 已进入合并模式，不再交换，等松手
+        if (adapter.folderMode) {
+            // 文件夹模式：不交换，只记录目标并高亮
+            clearFolderHighlight()
+            folderMergeTarget = adapter.getDisplayList().getOrNull(to)
+            folderMergeTargetPos = to
+            // 高亮目标
+            val holder = recyclerView.findViewHolderForAdapterPosition(to)
+            holder?.itemView?.apply {
+                scaleX = 1.2f
+                scaleY = 1.2f
+                translationZ = 8f
+            }
             return true
         }
 
-        if (to == lastTargetPosition) {
-            // 仍在同一个目标上，等待计时器，不交换
-            return true
-        }
-
-        // 移到新目标 → 重置合并计时
-        cancelHover()
-        lastTargetPosition = to
-
-        // 交换前记住目标项
-        pendingMergeItem = adapter.getDisplayList().getOrNull(to)
-
-        // 交换位置（实时预览）
+        // 普通移动模式：交换位置
         adapter.swapDragItems(from, to)
         hasMoved = true
-
-        // 开始合并计时
-        handler.postDelayed(hoverRunnable, HOVER_DELAY)
         return true
     }
 
@@ -90,9 +69,8 @@ class SpeedDialDragHelper(
                 scaleY = 1.15f
             }
             hasMoved = false
-            confirmedMergeItem = null
-            pendingMergeItem = null
-            lastTargetPosition = -1
+            folderMergeTarget = null
+            folderMergeTargetPos = -1
             adapter.startDragReorder()
         }
     }
@@ -100,11 +78,7 @@ class SpeedDialDragHelper(
     override fun clearView(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
         super.clearView(recyclerView, viewHolder)
 
-        // 先保存合并目标，再取消 hover（cancelHover 会清掉 confirmedMergeItem）
-        val mergeTarget = confirmedMergeItem
-        handler.removeCallbacks(hoverRunnable)
-        adapter.highlightPosition = -1
-
+        // 恢复拖拽项样式
         viewHolder.itemView.apply {
             alpha = 1.0f
             scaleX = 1.0f
@@ -112,34 +86,43 @@ class SpeedDialDragHelper(
             translationZ = 0f
         }
 
+        // 恢复目标高亮
+        clearFolderHighlight(recyclerView)
+
         val finalList = adapter.finishDragReorder()
 
-        if (mergeTarget != null) {
-            // 找到拖拽项（松手时 viewHolder 对应的位置）
-            val dragPos = viewHolder.bindingAdapterPosition.let {
-                if (it == RecyclerView.NO_POSITION) return@clearView else it
+        if (adapter.folderMode) {
+            // 文件夹模式：有目标就合并
+            val mergeTarget = folderMergeTarget
+            if (mergeTarget != null) {
+                val dragPos = viewHolder.bindingAdapterPosition
+                val dragItem = if (dragPos != RecyclerView.NO_POSITION) {
+                    finalList.getOrNull(dragPos)
+                } else null
+                if (dragItem != null && dragItem != mergeTarget) {
+                    onMerge(dragItem, mergeTarget)
+                }
             }
-            val dragItem = finalList.getOrNull(dragPos)
-            if (dragItem != null && dragItem != mergeTarget) {
-                onMerge(dragItem, mergeTarget)
-            }
+            // 没有目标就自动恢复原位（ItemTouchHelper 默认行为）
         } else if (hasMoved) {
             onReorder(finalList)
         }
 
         hasMoved = false
-        confirmedMergeItem = null
-        pendingMergeItem = null
-        lastTargetPosition = -1
+        folderMergeTarget = null
+        folderMergeTargetPos = -1
     }
 
-    private fun cancelHover() {
-        handler.removeCallbacks(hoverRunnable)
-        pendingMergeItem = null
-        if (confirmedMergeItem != null) {
-            adapter.highlightPosition = -1
-            confirmedMergeItem = null
+    private var lastHighlightedHolder: RecyclerView.ViewHolder? = null
+
+    private fun clearFolderHighlight(recyclerView: RecyclerView? = null) {
+        if (folderMergeTargetPos >= 0 && recyclerView != null) {
+            val holder = recyclerView.findViewHolderForAdapterPosition(folderMergeTargetPos)
+            holder?.itemView?.apply {
+                scaleX = 1.0f
+                scaleY = 1.0f
+                translationZ = 0f
+            }
         }
-        lastTargetPosition = -1
     }
 }

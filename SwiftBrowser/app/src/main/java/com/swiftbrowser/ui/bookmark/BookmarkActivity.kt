@@ -650,6 +650,16 @@ class BookmarkActivity : AppCompatActivity() {
 
         val titleText = "本地独有: ${onlyLocal.size} 项 | 云端独有: ${onlyCloud.size} 项"
 
+        val btnRefresh = android.widget.Button(this).apply {
+            text = "刷新比较"
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(16, 0, 16, 8)
+            }
+        }
+
         val dialogView = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             addView(listView, android.widget.LinearLayout.LayoutParams(
@@ -681,13 +691,19 @@ class BookmarkActivity : AppCompatActivity() {
                 addView(btnDownload)
             }
             addView(btnBar)
+            addView(btnRefresh)
         }
 
-        AlertDialog.Builder(this, R.style.DialogTheme)
+        val dialog = AlertDialog.Builder(this, R.style.DialogTheme)
             .setTitle(titleText)
             .setView(dialogView)
             .setNegativeButton("关闭", null)
             .show()
+
+        btnRefresh.setOnClickListener {
+            dialog.dismiss()
+            compareWithCloud()
+        }
     }
 
     private fun performUploadSync() {
@@ -727,7 +743,7 @@ class BookmarkActivity : AppCompatActivity() {
 
     private fun showCompareItemOptions(item: CompareItem) {
         val options = if (item.isLocal) {
-            arrayOf("从本地删除")
+            arrayOf("上传到云端", "从本地删除")
         } else {
             arrayOf("下载到本地", "从云端删除")
         }
@@ -736,6 +752,20 @@ class BookmarkActivity : AppCompatActivity() {
             .setTitle(item.title)
             .setItems(options) { _, which ->
                 when (options[which]) {
+                    "上传到云端" -> {
+                        item.localBookmark?.let { bookmark ->
+                            lifecycleScope.launch {
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        app.cloudSyncManager.uploadSingleBookmark(bookmark)
+                                    }
+                                    Toast.makeText(this@BookmarkActivity, "已上传到云端", Toast.LENGTH_SHORT).show()
+                                } catch (e: Exception) {
+                                    Toast.makeText(this@BookmarkActivity, "上传失败: ${e.message}", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    }
                     "从本地删除" -> {
                         item.localBookmark?.let { bookmark ->
                             lifecycleScope.launch {

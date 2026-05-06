@@ -178,6 +178,25 @@ class CloudSyncManager(
         result
     }
 
+    // ==================== 上传单条书签到云端 ====================
+
+    suspend fun uploadSingleBookmark(bookmark: Bookmark) = withContext(Dispatchers.IO) {
+        val body = JSONObject().apply {
+            put("title", bookmark.title)
+            put("url", bookmark.url ?: JSONObject.NULL)
+            put("isFolder", bookmark.isFolder)
+            put("parentId", JSONObject.NULL)
+            put("position", bookmark.position)
+            put("favicon", bookmark.favicon ?: JSONObject.NULL)
+            put("createdAt", bookmark.createdAt)
+        }
+        val response = post("/api/bookmarks/add", body.toString(), auth = true)
+        if (response.code != 200) {
+            val error = try { JSONObject(response.body).optString("error", "上传失败") } catch (e: Exception) { "上传失败" }
+            throw Exception(error)
+        }
+    }
+
     // ==================== 删除单条云端书签 ====================
 
     suspend fun deleteCloudBookmark(cloudId: Int) = withContext(Dispatchers.IO) {

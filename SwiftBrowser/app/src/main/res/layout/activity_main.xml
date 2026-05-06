@@ -66,15 +66,10 @@
         android:visibility="gone" />
 
     <!-- 内容区域 -->
-    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-        android:id="@+id/swipeRefresh"
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
-
-        <FrameLayout
-            android:layout_width="match_parent"
-            android:layout_height="match_parent">
 
             <!-- WebView 容器：多个标签的 WebView 放在这里 -->
             <FrameLayout
@@ -217,8 +212,6 @@
         </FrameLayout>
 
     </FrameLayout>
-
-</androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
     <!-- 底部导航栏 -->
     <LinearLayout

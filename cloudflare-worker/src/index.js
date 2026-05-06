@@ -25,6 +25,10 @@ export default {
       if (path === '/api/bookmarks/download' && request.method === 'GET') {
         return withAuth(request, env, handleDownload);
       }
+      // 添加单条书签到云端
+      if (path === '/api/bookmarks/add' && request.method === 'POST') {
+        return withAuth(request, env, handleAddOne);
+      }
       // 删除单条云端书签
       if (path.startsWith('/api/bookmarks/') && request.method === 'DELETE') {
         const id = path.split('/').pop();
@@ -107,6 +111,19 @@ async function handleUpload(request, env, userId) {
   }
 
   return json({ success: true, count: bookmarks.length });
+}
+
+async function handleAddOne(request, env, userId) {
+  const b = await request.json();
+  if (!b.title && !b.url) {
+    return json({ error: '书签数据不能为空' }, 400);
+  }
+
+  const result = await env.DB.prepare(
+    'INSERT INTO bookmarks (user_id, title, url, is_folder, parent_id, position, favicon, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(userId, b.title || '', b.url || null, b.isFolder ? 1 : 0, b.parentId != null ? b.parentId : null, b.position || 0, b.favicon || null, b.createdAt || Date.now()).run();
+
+  return json({ success: true, id: result.meta.last_row_id });
 }
 
 async function handleDeleteOne(request, env, userId, bookmarkId) {

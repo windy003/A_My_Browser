@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
     <item
+        android:id="@+id/action_refresh"
+        android:icon="@drawable/ic_refresh"
+        android:title="刷新" />
+    <item
         android:id="@+id/action_bookmarks"
         android:icon="@drawable/ic_bookmark"
         android:title="@string/bookmarks" />
@@ -20,6 +24,10 @@
         android:id="@+id/action_move_mode"
         android:icon="@drawable/ic_move"
         android:title="移动模式" />
+    <item
+        android:id="@+id/action_move_to_folder"
+        android:icon="@drawable/ic_folder"
+        android:title="移入文件夹" />
     <item
         android:id="@+id/action_batch_delete"
         android:icon="@drawable/ic_delete"
