@@ -94,21 +94,6 @@ class BookmarkActivity : AppCompatActivity() {
                 showRenameDialog(folder)
             }
         }
-
-        // 长按标题弹出操作菜单
-        binding.tvToolbarTitle.setOnLongClickListener {
-            val options = arrayOf("新建文件夹", "多选删除")
-            AlertDialog.Builder(this, R.style.DialogTheme)
-                .setTitle(currentFolder?.title ?: getString(R.string.bookmarks))
-                .setItems(options) { _, which ->
-                    when (options[which]) {
-                        "新建文件夹" -> showNewFolderDialog()
-                        "多选删除" -> enterBatchDeleteMode()
-                    }
-                }
-                .show()
-            true
-        }
     }
 
     private fun setupRecyclerView() {
