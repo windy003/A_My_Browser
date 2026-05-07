@@ -12,6 +12,7 @@ import android.view.DragEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.webkit.*
 import android.widget.EditText
 import android.widget.PopupMenu
@@ -75,6 +76,7 @@ class MainActivity : AppCompatActivity() {
         setupBottomBar()
         setupMenuButton()
         setupTabManager()
+        setupFindInPage()
 
         // 创建第一个标签
         createNewTab()
@@ -780,6 +782,14 @@ class MainActivity : AppCompatActivity() {
 
             popup.setOnMenuItemClickListener { item ->
                 when (item.itemId) {
+                    R.id.action_find_in_page -> {
+                        if (isShowingWebView) {
+                            showFindBar()
+                        } else {
+                            Toast.makeText(this, "请先浏览一个网页", Toast.LENGTH_SHORT).show()
+                        }
+                        true
+                    }
                     R.id.action_refresh -> {
                         if (isShowingWebView) {
                             activeTab?.webView?.reload()
@@ -957,11 +967,69 @@ class MainActivity : AppCompatActivity() {
     }
 
 
+    // ==================== 网页内搜索 ====================
+
+    private fun setupFindInPage() {
+        binding.etFindInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                performFind()
+                true
+            } else false
+        }
+
+        binding.btnFindNext.setOnClickListener {
+            activeTab?.webView?.findNext(true)
+        }
+
+        binding.btnFindPrev.setOnClickListener {
+            activeTab?.webView?.findNext(false)
+        }
+
+        binding.btnFindClose.setOnClickListener {
+            hideFindBar()
+        }
+    }
+
+    private fun showFindBar() {
+        binding.findBar.visibility = View.VISIBLE
+        binding.etFindInput.setText("")
+        binding.tvFindCount.text = ""
+        binding.etFindInput.requestFocus()
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.showSoftInput(binding.etFindInput, InputMethodManager.SHOW_IMPLICIT)
+
+        activeTab?.webView?.setFindListener { activeMatchOrdinal, numberOfMatches, isDoneCounting ->
+            if (isDoneCounting) {
+                binding.tvFindCount.text = if (numberOfMatches > 0)
+                    "${activeMatchOrdinal + 1}/$numberOfMatches"
+                else
+                    "0/0"
+            }
+        }
+    }
+
+    private fun hideFindBar() {
+        binding.findBar.visibility = View.GONE
+        activeTab?.webView?.clearMatches()
+        binding.etFindInput.setText("")
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(binding.etFindInput.windowToken, 0)
+    }
+
+    private fun performFind() {
+        val query = binding.etFindInput.text.toString().trim()
+        if (query.isNotEmpty()) {
+            activeTab?.webView?.findAllAsync(query)
+        }
+    }
+
     // ==================== 返回键 ====================
 
     @Deprecated("Use OnBackPressedCallback")
     override fun onBackPressed() {
-        if (speedDialAdapter.moveMode) {
+        if (binding.findBar.visibility == View.VISIBLE) {
+            hideFindBar()
+        } else if (speedDialAdapter.moveMode) {
             exitMoveMode()
         } else if (speedDialAdapter.folderMode) {
             exitFolderMode()
