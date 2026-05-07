@@ -6,6 +6,10 @@
     <color name="accent">#FF6D00</color>
     <color name="white">#FFFFFF</color>
     <color name="black">#000000</color>
+    <color name="url_bar_bg">#FFFFFF</color>
+    <color name="toolbar_text">#FFFFFF</color>
+    <color name="folder_preview_bg">#E8EAF6</color>
+    <color name="surface">#FFFFFF</color>
     <color name="gray_light">#F5F5F5</color>
     <color name="gray_medium">#9E9E9E</color>
     <color name="gray_dark">#616161</color>

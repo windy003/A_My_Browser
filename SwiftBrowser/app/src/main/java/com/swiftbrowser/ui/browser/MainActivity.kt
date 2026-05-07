@@ -15,6 +15,8 @@ import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.*
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import android.widget.EditText
 import android.widget.PopupMenu
 import android.widget.Toast
@@ -287,6 +289,11 @@ class MainActivity : AppCompatActivity() {
 
             // 伪装成普通浏览器，避免 Google 拒绝 WebView 中的 OAuth 登录
             settings.userAgentString = settings.userAgentString.replace("; wv", "")
+
+            // 暗黑模式：让网页内容也跟随系统暗色主题
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+                WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, true)
+            }
 
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#1E88E5</color>
+    <color name="primary_dark">#121212</color>
+    <color name="primary_light">#64B5F6</color>
+    <color name="accent">#FF9E40</color>
+    <color name="gray_light">#2C2C2C</color>
+    <color name="gray_medium">#9E9E9E</color>
+    <color name="gray_dark">#B0B0B0</color>
+    <color name="background">#121212</color>
+    <color name="card_background">#1E1E1E</color>
+    <color name="speed_dial_bg">#181818</color>
+    <color name="text_primary">#E0E0E0</color>
+    <color name="text_secondary">#AAAAAA</color>
+    <color name="divider">#333333</color>
+    <color name="red">#EF5350</color>
+    <color name="url_bar_bg">#2C2C2C</color>
+    <color name="toolbar_text">#E0E0E0</color>
+    <color name="folder_preview_bg">#2C2C3A</color>
+    <color name="surface">#1E1E1E</color>
+</resources>
