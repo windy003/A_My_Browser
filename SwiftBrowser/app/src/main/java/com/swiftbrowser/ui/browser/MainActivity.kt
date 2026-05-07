@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.view.DragEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.*
@@ -54,6 +55,7 @@ class MainActivity : AppCompatActivity() {
     private var activeTab: Tab? = null
     private var isShowingWebView = false
     private var isReordering = false
+    private var isToolbarHidden = false
     private lateinit var tabAdapter: TabAdapter
 
     // 当前标签的快捷访问
@@ -360,6 +362,18 @@ class MainActivity : AppCompatActivity() {
                     transport?.webView = view
                     resultMsg?.sendToTarget()
                     return true
+                }
+            }
+
+            // 监听滚动，向上滑动隐藏工具栏，向下滑动显示工具栏
+            setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
+                if (findTabByWebView(this) == activeTab && isShowingWebView) {
+                    val dy = scrollY - oldScrollY
+                    if (dy > 10 && !isToolbarHidden) {
+                        hideToolbar()
+                    } else if (dy < -10 && isToolbarHidden) {
+                        showToolbar()
+                    }
                 }
             }
 
@@ -916,6 +930,33 @@ class MainActivity : AppCompatActivity() {
         binding.speedDialContainer.visibility = View.VISIBLE
         binding.etUrl.setText("")
         hideTabOverlay()
+        // 回到首页时确保工具栏可见
+        if (isToolbarHidden) showToolbar()
+    }
+
+    private fun hideToolbar() {
+        if (isToolbarHidden) return
+        isToolbarHidden = true
+        binding.toolbar.animate()
+            .translationY(-binding.toolbar.height.toFloat())
+            .setDuration(200)
+            .setInterpolator(DecelerateInterpolator())
+            .withEndAction {
+                binding.toolbar.visibility = View.GONE
+            }
+            .start()
+    }
+
+    private fun showToolbar() {
+        if (!isToolbarHidden) return
+        isToolbarHidden = false
+        binding.toolbar.translationY = -binding.toolbar.height.toFloat()
+        binding.toolbar.visibility = View.VISIBLE
+        binding.toolbar.animate()
+            .translationY(0f)
+            .setDuration(200)
+            .setInterpolator(DecelerateInterpolator())
+            .start()
     }
 
     private fun addCurrentPageToBookmark() {
