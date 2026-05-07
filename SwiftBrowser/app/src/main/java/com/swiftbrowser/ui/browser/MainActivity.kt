@@ -365,16 +365,32 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // 监听滚动，向上滑动隐藏工具栏，向下滑动显示工具栏
-            setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
-                if (findTabByWebView(this) == activeTab && isShowingWebView) {
-                    val dy = scrollY - oldScrollY
-                    if (dy > 10 && !isToolbarHidden) {
-                        hideToolbar()
-                    } else if (dy < -10 && isToolbarHidden) {
-                        showToolbar()
+            // 通过触摸事件检测滑动方向，隐藏/显示工具栏
+            // 这样即使页面内部 div 滚动（如 SPA 应用）也能检测到
+            var touchStartY = 0f
+            var lastTouchY = 0f
+            var totalDy = 0f
+            setOnTouchListener { _, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        touchStartY = event.y
+                        lastTouchY = event.y
+                        totalDy = 0f
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dy = lastTouchY - event.y // 正值=手指上滑=页面下滚
+                        totalDy += dy
+                        lastTouchY = event.y
+                        if (findTabByWebView(this) == activeTab && isShowingWebView) {
+                            if (totalDy > 30 && !isToolbarHidden) {
+                                hideToolbar()
+                            } else if (totalDy < -30 && isToolbarHidden) {
+                                showToolbar()
+                            }
+                        }
                     }
                 }
+                false // 不消费事件，让 WebView 正常处理触摸
             }
 
         }
