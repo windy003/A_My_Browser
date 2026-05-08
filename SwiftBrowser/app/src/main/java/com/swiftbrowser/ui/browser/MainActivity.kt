@@ -1135,22 +1135,29 @@ class MainActivity : AppCompatActivity() {
     private fun hideToolbar() {
         if (isToolbarHidden) return
         isToolbarHidden = true
+        val toolbarH = binding.toolbar.height.toFloat()
+        val bottomH = binding.bottomBar.height.toFloat()
         binding.toolbar.animate()
-            .translationY(-binding.toolbar.height.toFloat())
+            .translationY(-toolbarH)
             .setDuration(200)
             .setInterpolator(DecelerateInterpolator())
-            .withEndAction {
-                binding.toolbar.visibility = View.GONE
-            }
+            .start()
+        binding.bottomBar.animate()
+            .translationY(bottomH)
+            .setDuration(200)
+            .setInterpolator(DecelerateInterpolator())
             .start()
     }
 
     private fun showToolbar() {
         if (!isToolbarHidden) return
         isToolbarHidden = false
-        binding.toolbar.translationY = -binding.toolbar.height.toFloat()
-        binding.toolbar.visibility = View.VISIBLE
         binding.toolbar.animate()
+            .translationY(0f)
+            .setDuration(200)
+            .setInterpolator(DecelerateInterpolator())
+            .start()
+        binding.bottomBar.animate()
             .translationY(0f)
             .setDuration(200)
             .setInterpolator(DecelerateInterpolator())

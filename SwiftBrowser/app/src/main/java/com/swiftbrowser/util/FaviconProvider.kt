@@ -41,8 +41,16 @@ object FaviconProvider {
 
     private fun extractDomain(url: String): String? {
         return try {
-            val host = Uri.parse(url).host ?: return null
-            host.removePrefix("www.")
+            val uri = Uri.parse(url)
+            val host = uri.host ?: return null
+            val domain = host.removePrefix("www.")
+            val port = uri.port
+            // IP 地址带非标准端口时，端口作为标识的一部分，避免缓存混淆
+            if (port != -1 && port != 80 && port != 443 && isIpAddress(domain)) {
+                "${domain}:${port}"
+            } else {
+                domain
+            }
         } catch (e: Exception) {
             null
         }
@@ -51,10 +59,20 @@ object FaviconProvider {
     private fun getBaseUrl(url: String): String? {
         return try {
             val uri = Uri.parse(url)
-            "${uri.scheme}://${uri.host}"
+            val port = uri.port
+            if (port != -1 && port != 80 && port != 443) {
+                "${uri.scheme}://${uri.host}:${port}"
+            } else {
+                "${uri.scheme}://${uri.host}"
+            }
         } catch (e: Exception) {
             null
         }
+    }
+
+    /** 判断域名是否为 IP 地址（外部图标服务对 IP 无效） */
+    private fun isIpAddress(domain: String): Boolean {
+        return domain.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")) || domain.contains(":")
     }
 
     // ==================== 各来源 URL 生成 ====================
@@ -262,7 +280,7 @@ object FaviconProvider {
 
         CoroutineScope(Dispatchers.Main).launch {
             val linkIcons = resolveIconsFromHtml(url)
-            loadWithFallbackChain(imageView, domain, linkIcons, isSpeedDial = true)
+            loadWithFallbackChain(imageView, domain, linkIcons, isSpeedDial = true, baseUrl = getBaseUrl(url))
         }
     }
 
@@ -297,37 +315,49 @@ object FaviconProvider {
 
         CoroutineScope(Dispatchers.Main).launch {
             val linkIcons = resolveIconsFromHtml(url)
-            loadWithFallbackChain(imageView, domain, linkIcons, isSpeedDial = false)
+            loadWithFallbackChain(imageView, domain, linkIcons, isSpeedDial = false, baseUrl = getBaseUrl(url))
         }
     }
 
     /**
      * 构建完整降级链:
-     * Brandfetch -> link 标签图标(按分辨率从高到低) -> DuckDuckGo -> Google Favicon -> 默认
+     * 域名: Brandfetch -> link 标签图标(按分辨率从高到低) -> DuckDuckGo -> Google Favicon -> 默认
+     * IP地址: link 标签图标 -> /favicon.ico -> 默认
      */
     private fun loadWithFallbackChain(
         imageView: ImageView,
         domain: String,
         linkIcons: List<String>,
-        isSpeedDial: Boolean
+        isSpeedDial: Boolean,
+        baseUrl: String? = null
     ) {
         val defaultRes = if (isSpeedDial) R.drawable.ic_speed_dial_default
                          else android.R.drawable.ic_menu_compass
+        val isIp = isIpAddress(domain)
 
         // 从最低优先级开始，向外包装 error() 降级
-        // 最内层: Google Favicon -> 默认
-        var request = Glide.with(imageView.context)
-            .load(getGoogleFaviconUrl(domain))
-            .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
-            .diskCacheStrategy(DiskCacheStrategy.ALL)
-            .error(defaultRes)
+        var request = if (isIp && baseUrl != null) {
+            // IP 地址：最内层用 /favicon.ico
+            Glide.with(imageView.context)
+                .load("${baseUrl}/favicon.ico")
+                .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .error(defaultRes)
+        } else {
+            // 域名：最内层 Google Favicon -> 默认
+            val googleRequest = Glide.with(imageView.context)
+                .load(getGoogleFaviconUrl(domain))
+                .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .error(defaultRes)
 
-        // 倒数第二层: DuckDuckGo -> (Google -> 默认)
-        request = Glide.with(imageView.context)
-            .load(getDuckDuckGoUrl(domain))
-            .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
-            .diskCacheStrategy(DiskCacheStrategy.ALL)
-            .error(request)
+            // DuckDuckGo -> (Google -> 默认)
+            Glide.with(imageView.context)
+                .load(getDuckDuckGoUrl(domain))
+                .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .error(googleRequest)
+        }
 
         // link 标签图标，从分辨率最低的开始包装（最高分辨率在最外层最先尝试）
         for (iconUrl in linkIcons.reversed()) {
@@ -338,13 +368,24 @@ object FaviconProvider {
                 .error(request)
         }
 
-        // 最外层: Brandfetch -> (link 标签 -> DuckDuckGo -> Google -> 默认)
-        Glide.with(imageView.context)
-            .load(getBrandfetchUrl(domain, if (isSpeedDial) 256 else 128))
-            .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
-            .diskCacheStrategy(DiskCacheStrategy.ALL)
-            .placeholder(defaultRes)
-            .error(request)
-            .into(imageView)
+        if (isIp) {
+            // IP 地址：link 标签 -> /favicon.ico -> 默认
+            Glide.with(imageView.context)
+                .load(if (linkIcons.isNotEmpty()) linkIcons.first() else "${baseUrl}/favicon.ico")
+                .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .placeholder(defaultRes)
+                .error(request)
+                .into(imageView)
+        } else {
+            // 域名：Brandfetch -> (link 标签 -> DuckDuckGo -> Google -> 默认)
+            Glide.with(imageView.context)
+                .load(getBrandfetchUrl(domain, if (isSpeedDial) 256 else 128))
+                .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .placeholder(defaultRes)
+                .error(request)
+                .into(imageView)
+        }
     }
 }
