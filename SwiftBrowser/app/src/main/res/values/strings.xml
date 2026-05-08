@@ -51,4 +51,8 @@
     <string name="import_bookmarks">导入Chrome书签</string>
     <string name="import_success">成功导入 %d 个书签</string>
     <string name="import_cancelled">已取消导入</string>
+    <string name="download_confirm">下载文件</string>
+    <string name="download_confirm_message">是否下载 \"%s\"？</string>
+    <string name="download_started">开始下载：%s</string>
+    <string name="download_need_permission">需要存储权限才能下载文件</string>
 </resources>

@@ -4,6 +4,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".SwiftBrowserApp"
@@ -43,8 +47,23 @@
             android:parentActivityName=".ui.browser.MainActivity" />
 
         <activity
+            android:name=".ui.download.DownloadActivity"
+            android:label="下载记录"
+            android:parentActivityName=".ui.browser.MainActivity" />
+
+        <activity
             android:name=".ui.auth.LoginActivity"
             android:label="@string/sign_in" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.swiftbrowser.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 

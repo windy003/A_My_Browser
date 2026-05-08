@@ -1,24 +1,31 @@
 package com.swiftbrowser.ui.browser
 
+import android.Manifest
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
+import android.app.DownloadManager
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.view.DragEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.animation.ValueAnimator
 import android.view.animation.DecelerateInterpolator
-import android.widget.LinearLayout
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.*
+import android.widget.LinearLayout
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import android.widget.EditText
@@ -72,6 +79,20 @@ class MainActivity : AppCompatActivity() {
     // 当前标签的快捷访问
     private val currentUrl: String? get() = activeTab?.url
     private val currentTitle: String? get() = activeTab?.title
+
+    // 下载
+    private var pendingDownload: PendingDownload? = null
+    private data class PendingDownload(val url: String, val contentDisposition: String?, val mimeType: String?, val fileName: String)
+    private val storagePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            pendingDownload?.let { startDownload(it.url, it.contentDisposition, it.mimeType, it.fileName) }
+        } else {
+            Toast.makeText(this, R.string.download_need_permission, Toast.LENGTH_SHORT).show()
+        }
+        pendingDownload = null
+    }
 
     override fun attachBaseContext(newBase: android.content.Context?) {
         val config = android.content.res.Configuration(newBase?.resources?.configuration)
@@ -527,7 +548,63 @@ class MainActivity : AppCompatActivity() {
                 false // 不消费事件，让 WebView 正常处理触摸
             }
 
+            // 下载监听
+            setDownloadListener { url, _userAgent, contentDisposition, mimeType, _contentLength ->
+                val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+                showDownloadConfirmDialog(url, contentDisposition, mimeType, fileName)
+            }
+
         }
+    }
+
+    // ==================== 下载 ====================
+
+    private fun showDownloadConfirmDialog(url: String, contentDisposition: String?, mimeType: String?, fileName: String) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.download_confirm)
+            .setMessage(getString(R.string.download_confirm_message, fileName))
+            .setPositiveButton(R.string.save) { _, _ ->
+                requestDownload(url, contentDisposition, mimeType, fileName)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun requestDownload(url: String, contentDisposition: String?, mimeType: String?, fileName: String) {
+        // Android 10+ 不需要存储权限，使用 MediaStore
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+                pendingDownload = PendingDownload(url, contentDisposition, mimeType, fileName)
+                storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                return
+            }
+        }
+        startDownload(url, contentDisposition, mimeType, fileName)
+    }
+
+    private fun startDownload(url: String, contentDisposition: String?, mimeType: String?, fileName: String) {
+        val request = DownloadManager.Request(Uri.parse(url)).apply {
+            setMimeType(mimeType)
+            addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url) ?: "")
+            setTitle(fileName)
+            setDescription(fileName)
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+        }
+        val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+        dm.enqueue(request)
+        // 保存下载记录
+        lifecycleScope.launch {
+            app.database.downloadRecordDao().insert(
+                com.swiftbrowser.data.entity.DownloadRecord(
+                    fileName = fileName,
+                    url = url,
+                    mimeType = mimeType
+                )
+            )
+        }
+        Toast.makeText(this, getString(R.string.download_started, fileName), Toast.LENGTH_SHORT).show()
     }
 
     // ==================== 广告拦截 ====================
@@ -1018,6 +1095,10 @@ class MainActivity : AppCompatActivity() {
                     }
                     R.id.action_history -> {
                         startActivity(Intent(this, HistoryActivity::class.java))
+                        true
+                    }
+                    R.id.action_downloads -> {
+                        startActivity(Intent(this, com.swiftbrowser.ui.download.DownloadActivity::class.java))
                         true
                     }
                     R.id.action_add_bookmark -> {

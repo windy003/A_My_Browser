@@ -1,5 +1,7 @@
 package com.swiftbrowser.util
 
+import android.content.Context
+import android.content.SharedPreferences
 import android.net.Uri
 import android.util.LruCache
 import android.widget.ImageView
@@ -30,11 +32,36 @@ object FaviconProvider {
      */
     private val linkIconCache = LruCache<String, List<String>>(200)
 
+    private const val PREFS_NAME = "favicon_link_cache"
+    private const val SEPARATOR = "\u001F" // 单元分隔符，用于拼接 URL 列表
+    private var prefs: SharedPreferences? = null
+
     /**
-     * 清除内存中的 link 图标缓存，配合 Glide 缓存清理实现完整刷新
+     * 初始化持久化缓存，在 Application.onCreate 中调用
+     */
+    fun init(context: Context) {
+        prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        // 从 SharedPreferences 恢复到内存缓存
+        prefs?.all?.forEach { (domain, value) ->
+            if (value is String && value.isNotEmpty()) {
+                linkIconCache.put(domain, value.split(SEPARATOR))
+            }
+        }
+    }
+
+    /**
+     * 将域名对应的图标 URL 列表持久化
+     */
+    private fun persistToPrefs(domain: String, urls: List<String>) {
+        prefs?.edit()?.putString(domain, urls.joinToString(SEPARATOR))?.apply()
+    }
+
+    /**
+     * 清除内存和磁盘中的 link 图标缓存，配合 Glide 缓存清理实现完整刷新
      */
     fun clearLinkIconCache() {
         linkIconCache.evictAll()
+        prefs?.edit()?.clear()?.apply()
     }
 
     // ==================== 域名提取 ====================
@@ -125,6 +152,7 @@ object FaviconProvider {
                 val urls = sorted.map { it.href }
                 if (urls.isNotEmpty()) {
                     linkIconCache.put(domain, urls)
+                    persistToPrefs(domain, urls)
                 }
                 urls
             } catch (e: Exception) {

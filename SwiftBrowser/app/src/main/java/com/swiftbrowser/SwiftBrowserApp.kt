@@ -4,6 +4,7 @@ import android.app.Application
 import com.swiftbrowser.data.database.AppDatabase
 import com.swiftbrowser.data.entity.Bookmark
 import com.swiftbrowser.sync.CloudSyncManager
+import com.swiftbrowser.util.FaviconProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -25,6 +26,7 @@ class SwiftBrowserApp : Application() {
         instance = this
         database = AppDatabase.getInstance(this)
         cloudSyncManager = CloudSyncManager(database.bookmarkDao(), this)
+        FaviconProvider.init(this)
 
         // 确保"快速拨号"根文件夹存在
         CoroutineScope(Dispatchers.IO).launch {

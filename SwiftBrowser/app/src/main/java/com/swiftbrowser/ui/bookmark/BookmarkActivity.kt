@@ -575,9 +575,7 @@ class BookmarkActivity : AppCompatActivity() {
                     !it.isFolder && it.url != null && it.url !in localUrls
                 }
 
-                runOnUiThread {
-                    showCompareResultDialog(onlyLocal, onlyCloud)
-                }
+                showCompareResultDialog(onlyLocal, onlyCloud, localBookmarks, cloudBookmarks)
             } catch (e: Exception) {
                 runOnUiThread {
                     Toast.makeText(this@BookmarkActivity, "比较失败: ${e.message}", Toast.LENGTH_LONG).show()
@@ -589,115 +587,155 @@ class BookmarkActivity : AppCompatActivity() {
     /** 比较结果中的条目 */
     private data class CompareItem(
         val title: String,
+        val path: String, // 完整路径，如 "文件夹1 - 文件夹2 - 书签名"
         val url: String,
         val isLocal: Boolean, // true=本地独有, false=云端独有
         val localBookmark: Bookmark? = null,
         val cloudBookmark: CloudSyncManager.CloudBookmark? = null
     )
 
+    /** 构建本地书签的完整路径 */
+    private suspend fun buildLocalPath(bookmark: Bookmark, allBookmarks: List<Bookmark>): String {
+        val idMap = allBookmarks.associateBy { it.id }
+        val parts = mutableListOf(bookmark.title)
+        var parentId = bookmark.parentId
+        while (parentId != null) {
+            val parent = idMap[parentId] ?: break
+            parts.add(0, "【${parent.title}】")
+            parentId = parent.parentId
+        }
+        return parts.joinToString(" - ")
+    }
+
+    /** 构建云端书签的完整路径 */
+    private fun buildCloudPath(
+        cloud: CloudSyncManager.CloudBookmark,
+        allCloud: List<CloudSyncManager.CloudBookmark>
+    ): String {
+        val parts = mutableListOf(cloud.title)
+        var parentIdx = cloud.parentIndex
+        while (parentIdx != null && parentIdx in allCloud.indices) {
+            val parent = allCloud[parentIdx]
+            parts.add(0, "【${parent.title}】")
+            parentIdx = parent.parentIndex
+        }
+        return parts.joinToString(" - ")
+    }
+
     private fun showCompareResultDialog(
         onlyLocal: List<Bookmark>,
-        onlyCloud: List<CloudSyncManager.CloudBookmark>
+        onlyCloud: List<CloudSyncManager.CloudBookmark>,
+        allLocalBookmarks: List<Bookmark>,
+        allCloudBookmarks: List<CloudSyncManager.CloudBookmark>
     ) {
         if (onlyLocal.isEmpty() && onlyCloud.isEmpty()) {
             Toast.makeText(this, "本地与云端书签完全一致", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val items = mutableListOf<CompareItem>()
-        for (b in onlyLocal) {
-            items.add(CompareItem(
-                title = b.title,
-                url = b.url!!,
-                isLocal = true,
-                localBookmark = b
-            ))
-        }
-        for (b in onlyCloud) {
-            items.add(CompareItem(
-                title = b.title,
-                url = b.url!!,
-                isLocal = false,
-                cloudBookmark = b
-            ))
-        }
-
-        val displayItems = items.map { item ->
-            val prefix = if (item.isLocal) "【本地独有】" else "【云端独有】"
-            "$prefix ${item.title}"
-        }
-
-        var compareDialog: AlertDialog? = null
-
-        val listView = ListView(this).apply {
-            adapter = ArrayAdapter(
-                this@BookmarkActivity,
-                android.R.layout.simple_list_item_1,
-                displayItems
-            )
-            setOnItemLongClickListener { _, _, position, _ ->
-                showCompareItemOptions(items[position], compareDialog)
-                true
+        lifecycleScope.launch {
+            val items = mutableListOf<CompareItem>()
+            for (b in onlyLocal) {
+                val path = buildLocalPath(b, allLocalBookmarks)
+                items.add(CompareItem(
+                    title = b.title,
+                    path = path,
+                    url = b.url!!,
+                    isLocal = true,
+                    localBookmark = b
+                ))
             }
-        }
-
-        val titleText = "本地独有: ${onlyLocal.size} 项 | 云端独有: ${onlyCloud.size} 项"
-
-        val btnRefresh = android.widget.Button(this).apply {
-            text = "刷新比较"
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(16, 0, 16, 8)
+            for (b in onlyCloud) {
+                val path = buildCloudPath(b, allCloudBookmarks)
+                items.add(CompareItem(
+                    title = b.title,
+                    path = path,
+                    url = b.url!!,
+                    isLocal = false,
+                    cloudBookmark = b
+                ))
             }
-        }
 
-        val dialogView = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            addView(listView, android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
-            ))
+            items.sortBy { it.path }
 
-            // 底部按钮栏
-            val btnBar = android.widget.LinearLayout(this@BookmarkActivity).apply {
-                orientation = android.widget.LinearLayout.HORIZONTAL
-                setPadding(16, 8, 16, 8)
-
-                val btnUpload = android.widget.Button(this@BookmarkActivity).apply {
-                    text = "同步到云端"
-                    layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                }
-                val btnDownload = android.widget.Button(this@BookmarkActivity).apply {
-                    text = "同步到本地"
-                    layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                }
-
-                btnUpload.setOnClickListener {
-                    performUploadSync(compareDialog)
-                }
-                btnDownload.setOnClickListener {
-                    performDownloadSync(compareDialog)
-                }
-
-                addView(btnUpload)
-                addView(btnDownload)
+            val displayItems = items.map { item ->
+                val prefix = if (item.isLocal) "【本地】" else "【云端】"
+                "$prefix ${item.path}"
             }
-            addView(btnBar)
-            addView(btnRefresh)
-        }
 
-        val dialog = AlertDialog.Builder(this, R.style.DialogTheme)
-            .setTitle(titleText)
-            .setView(dialogView)
-            .setNegativeButton("关闭", null)
-            .show()
+            runOnUiThread {
+                var compareDialog: AlertDialog? = null
 
-        compareDialog = dialog
+                val listView = ListView(this@BookmarkActivity).apply {
+                    adapter = ArrayAdapter(
+                        this@BookmarkActivity,
+                        android.R.layout.simple_list_item_1,
+                        displayItems
+                    )
+                    setOnItemLongClickListener { _, _, position, _ ->
+                        showCompareItemOptions(items[position], compareDialog)
+                        true
+                    }
+                }
 
-        btnRefresh.setOnClickListener {
-            dialog.dismiss()
-            compareWithCloud()
+                val titleText = "本地独有: ${onlyLocal.size} 项 | 云端独有: ${onlyCloud.size} 项"
+
+                val btnRefresh = android.widget.Button(this@BookmarkActivity).apply {
+                    text = "刷新比较"
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        setMargins(16, 0, 16, 8)
+                    }
+                }
+
+                val dialogView = android.widget.LinearLayout(this@BookmarkActivity).apply {
+                    orientation = android.widget.LinearLayout.VERTICAL
+                    addView(listView, android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+                    ))
+
+                    val btnBar = android.widget.LinearLayout(this@BookmarkActivity).apply {
+                        orientation = android.widget.LinearLayout.HORIZONTAL
+                        setPadding(16, 8, 16, 8)
+
+                        val btnUpload = android.widget.Button(this@BookmarkActivity).apply {
+                            text = "同步到云端"
+                            layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                        }
+                        val btnDownload = android.widget.Button(this@BookmarkActivity).apply {
+                            text = "同步到本地"
+                            layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                        }
+
+                        btnUpload.setOnClickListener {
+                            performUploadSync(compareDialog)
+                        }
+                        btnDownload.setOnClickListener {
+                            performDownloadSync(compareDialog)
+                        }
+
+                        addView(btnUpload)
+                        addView(btnDownload)
+                    }
+                    addView(btnBar)
+                    addView(btnRefresh)
+                }
+
+                val dialog = AlertDialog.Builder(this@BookmarkActivity, R.style.DialogTheme)
+                    .setTitle(titleText)
+                    .setView(dialogView)
+                    .setNegativeButton("关闭", null)
+                    .show()
+
+                compareDialog = dialog
+
+                btnRefresh.setOnClickListener {
+                    dialog.dismiss()
+                    compareWithCloud()
+                }
+            }
         }
     }
 
