@@ -5,10 +5,6 @@
         android:icon="@drawable/ic_refresh"
         android:title="刷新" />
     <item
-        android:id="@+id/action_find_in_page"
-        android:icon="@drawable/ic_search"
-        android:title="搜索网页" />
-    <item
         android:id="@+id/action_bookmarks"
         android:icon="@drawable/ic_bookmark"
         android:title="@string/bookmarks" />
@@ -17,13 +13,17 @@
         android:icon="@drawable/ic_history"
         android:title="历史记录" />
     <item
+        android:id="@+id/action_add_speed_dial"
+        android:icon="@drawable/ic_add"
+        android:title="@string/add_speed_dial" />
+    <item
         android:id="@+id/action_add_bookmark"
         android:icon="@drawable/ic_add"
         android:title="@string/add_bookmark" />
     <item
-        android:id="@+id/action_add_speed_dial"
-        android:icon="@drawable/ic_add"
-        android:title="@string/add_speed_dial" />
+        android:id="@+id/action_find_in_page"
+        android:icon="@drawable/ic_search"
+        android:title="搜索网页" />
     <item
         android:id="@+id/action_move_mode"
         android:icon="@drawable/ic_move"
