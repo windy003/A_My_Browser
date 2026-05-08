@@ -13,7 +13,9 @@ import android.view.DragEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.animation.ValueAnimator
 import android.view.animation.DecelerateInterpolator
+import android.widget.LinearLayout
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.*
@@ -1135,33 +1137,62 @@ class MainActivity : AppCompatActivity() {
     private fun hideToolbar() {
         if (isToolbarHidden) return
         isToolbarHidden = true
-        val toolbarH = binding.toolbar.height.toFloat()
-        val bottomH = binding.bottomBar.height.toFloat()
-        binding.toolbar.animate()
-            .translationY(-toolbarH)
-            .setDuration(200)
-            .setInterpolator(DecelerateInterpolator())
-            .start()
-        binding.bottomBar.animate()
-            .translationY(bottomH)
-            .setDuration(200)
-            .setInterpolator(DecelerateInterpolator())
-            .start()
+        val toolbarH = binding.toolbar.height
+        val bottomH = binding.bottomBar.height
+        // 通过 margin 动画平滑地释放空间，避免闪烁
+        ValueAnimator.ofInt(0, toolbarH).apply {
+            duration = 200
+            interpolator = DecelerateInterpolator()
+            addUpdateListener {
+                val value = it.animatedValue as Int
+                val params = binding.toolbar.layoutParams as LinearLayout.LayoutParams
+                params.topMargin = -value
+                binding.toolbar.layoutParams = params
+            }
+            start()
+        }
+        ValueAnimator.ofInt(0, bottomH).apply {
+            duration = 200
+            interpolator = DecelerateInterpolator()
+            addUpdateListener {
+                val value = it.animatedValue as Int
+                val params = binding.bottomBar.layoutParams as LinearLayout.LayoutParams
+                params.bottomMargin = -value
+                binding.bottomBar.layoutParams = params
+            }
+            start()
+        }
     }
 
     private fun showToolbar() {
         if (!isToolbarHidden) return
         isToolbarHidden = false
-        binding.toolbar.animate()
-            .translationY(0f)
-            .setDuration(200)
-            .setInterpolator(DecelerateInterpolator())
-            .start()
-        binding.bottomBar.animate()
-            .translationY(0f)
-            .setDuration(200)
-            .setInterpolator(DecelerateInterpolator())
-            .start()
+        val toolbarParams = binding.toolbar.layoutParams as LinearLayout.LayoutParams
+        val bottomParams = binding.bottomBar.layoutParams as LinearLayout.LayoutParams
+        val curToolbarMargin = toolbarParams.topMargin
+        val curBottomMargin = bottomParams.bottomMargin
+        ValueAnimator.ofInt(curToolbarMargin, 0).apply {
+            duration = 200
+            interpolator = DecelerateInterpolator()
+            addUpdateListener {
+                val value = it.animatedValue as Int
+                val params = binding.toolbar.layoutParams as LinearLayout.LayoutParams
+                params.topMargin = value
+                binding.toolbar.layoutParams = params
+            }
+            start()
+        }
+        ValueAnimator.ofInt(curBottomMargin, 0).apply {
+            duration = 200
+            interpolator = DecelerateInterpolator()
+            addUpdateListener {
+                val value = it.animatedValue as Int
+                val params = binding.bottomBar.layoutParams as LinearLayout.LayoutParams
+                params.bottomMargin = value
+                binding.bottomBar.layoutParams = params
+            }
+            start()
+        }
     }
 
     private fun addCurrentPageToBookmark() {
@@ -1223,11 +1254,15 @@ class MainActivity : AppCompatActivity() {
             val screenHeight = rootView.rootView.height
             val keypadHeight = screenHeight - rect.bottom
             if (keypadHeight > screenHeight * 0.15) {
-                // 键盘弹出
-                binding.bottomBar.visibility = View.GONE
+                // 键盘弹出时隐藏底栏
+                if (!isToolbarHidden) {
+                    binding.bottomBar.visibility = View.GONE
+                }
             } else {
-                // 键盘收起
-                binding.bottomBar.visibility = View.VISIBLE
+                // 键盘收起时恢复底栏（仅在工具栏未隐藏时）
+                if (!isToolbarHidden) {
+                    binding.bottomBar.visibility = View.VISIBLE
+                }
             }
         }
     }
