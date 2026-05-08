@@ -627,6 +627,8 @@ class BookmarkActivity : AppCompatActivity() {
             "$prefix ${item.title}"
         }
 
+        var compareDialog: AlertDialog? = null
+
         val listView = ListView(this).apply {
             adapter = ArrayAdapter(
                 this@BookmarkActivity,
@@ -634,7 +636,7 @@ class BookmarkActivity : AppCompatActivity() {
                 displayItems
             )
             setOnItemLongClickListener { _, _, position, _ ->
-                showCompareItemOptions(items[position])
+                showCompareItemOptions(items[position], compareDialog)
                 true
             }
         }
@@ -672,10 +674,10 @@ class BookmarkActivity : AppCompatActivity() {
                 }
 
                 btnUpload.setOnClickListener {
-                    performUploadSync()
+                    performUploadSync(compareDialog)
                 }
                 btnDownload.setOnClickListener {
-                    performDownloadSync()
+                    performDownloadSync(compareDialog)
                 }
 
                 addView(btnUpload)
@@ -691,13 +693,15 @@ class BookmarkActivity : AppCompatActivity() {
             .setNegativeButton("关闭", null)
             .show()
 
+        compareDialog = dialog
+
         btnRefresh.setOnClickListener {
             dialog.dismiss()
             compareWithCloud()
         }
     }
 
-    private fun performUploadSync() {
+    private fun performUploadSync(parentDialog: AlertDialog? = null) {
         val cloudSync = app.cloudSyncManager
         if (!cloudSync.isLoggedIn) {
             Toast.makeText(this, "请先登录云端账号", Toast.LENGTH_SHORT).show()
@@ -708,13 +712,15 @@ class BookmarkActivity : AppCompatActivity() {
             try {
                 withContext(Dispatchers.IO) { cloudSync.uploadBookmarks() }
                 Toast.makeText(this@BookmarkActivity, "上传成功", Toast.LENGTH_SHORT).show()
+                parentDialog?.dismiss()
+                compareWithCloud()
             } catch (e: Exception) {
                 Toast.makeText(this@BookmarkActivity, "上传失败: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
 
-    private fun performDownloadSync() {
+    private fun performDownloadSync(parentDialog: AlertDialog? = null) {
         val cloudSync = app.cloudSyncManager
         if (!cloudSync.isLoggedIn) {
             Toast.makeText(this, "请先登录云端账号", Toast.LENGTH_SHORT).show()
@@ -726,13 +732,15 @@ class BookmarkActivity : AppCompatActivity() {
                 withContext(Dispatchers.IO) { cloudSync.downloadBookmarks() }
                 Toast.makeText(this@BookmarkActivity, "下载成功", Toast.LENGTH_SHORT).show()
                 loadCurrentFolder()
+                parentDialog?.dismiss()
+                compareWithCloud()
             } catch (e: Exception) {
                 Toast.makeText(this@BookmarkActivity, "下载失败: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
 
-    private fun showCompareItemOptions(item: CompareItem) {
+    private fun showCompareItemOptions(item: CompareItem, parentDialog: AlertDialog? = null) {
         val options = if (item.isLocal) {
             arrayOf("上传到云端", "从本地删除")
         } else {
@@ -762,6 +770,8 @@ class BookmarkActivity : AppCompatActivity() {
                             lifecycleScope.launch {
                                 bookmarkDao.deleteById(bookmark.id)
                                 Toast.makeText(this@BookmarkActivity, "已从本地删除", Toast.LENGTH_SHORT).show()
+                                parentDialog?.dismiss()
+                                compareWithCloud()
                             }
                         }
                     }
@@ -796,6 +806,8 @@ class BookmarkActivity : AppCompatActivity() {
                                         app.cloudSyncManager.deleteCloudBookmark(cloud.id)
                                     }
                                     Toast.makeText(this@BookmarkActivity, "已从云端删除", Toast.LENGTH_SHORT).show()
+                                    parentDialog?.dismiss()
+                                    compareWithCloud()
                                 } catch (e: Exception) {
                                     Toast.makeText(this@BookmarkActivity, "删除失败: ${e.message}", Toast.LENGTH_LONG).show()
                                 }
