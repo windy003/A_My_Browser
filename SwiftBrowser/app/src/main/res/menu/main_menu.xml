@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
     <item
-        android:id="@+id/action_find_in_page"
-        android:icon="@drawable/ic_search"
-        android:title="搜索网页" />
-    <item
         android:id="@+id/action_refresh"
         android:icon="@drawable/ic_refresh"
         android:title="刷新" />
+    <item
+        android:id="@+id/action_find_in_page"
+        android:icon="@drawable/ic_search"
+        android:title="搜索网页" />
     <item
         android:id="@+id/action_bookmarks"
         android:icon="@drawable/ic_bookmark"

@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.net.Uri
@@ -11,6 +12,7 @@ import android.os.Bundle
 import android.view.DragEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
@@ -60,6 +62,11 @@ class MainActivity : AppCompatActivity() {
     private var isToolbarHidden = false
     private lateinit var tabAdapter: TabAdapter
 
+    // 全屏视频
+    private var customView: View? = null
+    private var customViewCallback: WebChromeClient.CustomViewCallback? = null
+    private var originalOrientation: Int = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+
     // 当前标签的快捷访问
     private val currentUrl: String? get() = activeTab?.url
     private val currentTitle: String? get() = activeTab?.title
@@ -81,6 +88,7 @@ class MainActivity : AppCompatActivity() {
         setupMenuButton()
         setupTabManager()
         setupFindInPage()
+        setupKeyboardListener()
 
         // 创建第一个标签
         createNewTab()
@@ -128,6 +136,13 @@ class MainActivity : AppCompatActivity() {
         binding.webViewContainer.removeAllViews()
         tab.webView?.let { binding.webViewContainer.addView(it) }
 
+        // 标签面板打开时只切换底层内容，不关闭面板
+        if (binding.tabOverlay.visibility == View.VISIBLE) {
+            binding.etUrl.setText(tab.url ?: "")
+            isShowingWebView = tab.url != null
+            return
+        }
+
         // 更新地址栏
         if (tab.url != null) {
             binding.etUrl.setText(tab.url)
@@ -138,13 +153,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun closeTab(tab: Tab) {
+        val isTabOverlayVisible = binding.tabOverlay.visibility == View.VISIBLE
+
         if (tabs.size <= 1) {
             // 最后一个标签，不关闭，而是清空
             tab.webView?.loadUrl("about:blank")
             tab.url = null
             tab.title = null
             tab.thumbnail = null
-            showHomePage()
+            if (!isTabOverlayVisible) {
+                showHomePage()
+            }
             return
         }
 
@@ -314,7 +333,7 @@ class MainActivity : AppCompatActivity() {
                     if (tab == activeTab) {
                         binding.etUrl.setText(url)
                         binding.progressBar.visibility = View.GONE
-                                    }
+                    }
                     // 记录历史
                     if (url != null && url != "about:blank") {
                         lifecycleScope.launch {
@@ -326,6 +345,32 @@ class MainActivity : AppCompatActivity() {
                             )
                         }
                     }
+                    // 注入广告清理脚本：移除广告覆盖层，阻止广告点击劫持
+                    view?.evaluateJavascript("""
+                        (function() {
+                            // 移除透明覆盖层（广告用来劫持点击的）
+                            var overlays = document.querySelectorAll('div[style*="z-index"][style*="position"]');
+                            overlays.forEach(function(el) {
+                                var style = window.getComputedStyle(el);
+                                if ((style.opacity === '0' || style.opacity < 0.1 || style.background === 'transparent' || style.backgroundColor === 'transparent')
+                                    && parseInt(style.zIndex) > 100
+                                    && (style.position === 'fixed' || style.position === 'absolute')
+                                    && el.offsetWidth > window.innerWidth * 0.5) {
+                                    el.remove();
+                                }
+                            });
+                            // 移除广告 iframe
+                            var iframes = document.querySelectorAll('iframe');
+                            iframes.forEach(function(iframe) {
+                                var src = iframe.src || '';
+                                if (src.match(/(magsrv|exoclick|juicyads|trafficjunky|xxxvjmp|mavrtracktor|popads|clickadu)/i)) {
+                                    iframe.remove();
+                                }
+                            });
+                            // 阻止 window.open 弹窗
+                            window.open = function() { return null; };
+                        })();
+                    """.trimIndent(), null)
                 }
 
                 override fun shouldOverrideUrlLoading(
@@ -339,8 +384,25 @@ class MainActivity : AppCompatActivity() {
                         } catch (_: Exception) { }
                         return true
                     }
+                    // 拦截广告域名的页面跳转
+                    val host = request.url?.host?.lowercase() ?: return false
+                    if (isAdHost(host)) {
+                        return true // 阻止跳转到广告页面
+                    }
                     return false
                 }
+
+                override fun shouldInterceptRequest(
+                    view: WebView?,
+                    request: WebResourceRequest?
+                ): WebResourceResponse? {
+                    val host = request?.url?.host?.lowercase() ?: return null
+                    if (isAdHost(host)) {
+                        return WebResourceResponse("text/plain", "utf-8", null)
+                    }
+                    return null
+                }
+
             }
 
             webChromeClient = object : WebChromeClient() {
@@ -358,6 +420,49 @@ class MainActivity : AppCompatActivity() {
                     tab.title = title
                 }
 
+                // 视频全屏播放
+                override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                    if (customView != null) {
+                        callback?.onCustomViewHidden()
+                        return
+                    }
+                    customView = view
+                    customViewCallback = callback
+                    originalOrientation = requestedOrientation
+
+                    // 隐藏主界面，显示全屏视频
+                    binding.mainContent.visibility = View.GONE
+                    binding.customViewContainer.visibility = View.VISIBLE
+                    binding.customViewContainer.addView(view)
+
+                    // 横屏 + 全屏
+                    requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                    window.decorView.systemUiVisibility = (
+                        View.SYSTEM_UI_FLAG_FULLSCREEN
+                        or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    )
+                }
+
+                override fun onHideCustomView() {
+                    if (customView == null) return
+
+                    // 移除全屏视频，恢复主界面
+                    binding.customViewContainer.removeView(customView)
+                    binding.customViewContainer.visibility = View.GONE
+                    binding.mainContent.visibility = View.VISIBLE
+
+                    customViewCallback?.onCustomViewHidden()
+                    customView = null
+                    customViewCallback = null
+
+                    // 恢复方向和状态栏
+                    requestedOrientation = originalOrientation
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                    window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+                }
+
                 // 处理 OAuth 等需要弹窗的页面（如 Google 登录），复用当前 WebView
                 override fun onCreateWindow(
                     view: WebView?,
@@ -365,8 +470,28 @@ class MainActivity : AppCompatActivity() {
                     isUserGesture: Boolean,
                     resultMsg: android.os.Message?
                 ): Boolean {
+                    // 用临时 WebView 获取弹窗的目标 URL，拦截广告弹窗
+                    val tempWebView = WebView(this@MainActivity)
+                    tempWebView.webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(
+                            view: WebView?,
+                            request: WebResourceRequest?
+                        ): Boolean {
+                            val url = request?.url?.toString() ?: return true
+                            val host = request.url?.host?.lowercase() ?: return true
+                            if (isAdHost(host)) {
+                                tempWebView.destroy()
+                                return true // 拦截广告弹窗
+                            }
+                            // 非广告链接，在新标签页中打开
+                            tempWebView.destroy()
+                            createNewTab()
+                            loadUrl(url)
+                            return true
+                        }
+                    }
                     val transport = resultMsg?.obj as? WebView.WebViewTransport
-                    transport?.webView = view
+                    transport?.webView = tempWebView
                     resultMsg?.sendToTarget()
                     return true
                 }
@@ -400,6 +525,56 @@ class MainActivity : AppCompatActivity() {
                 false // 不消费事件，让 WebView 正常处理触摸
             }
 
+        }
+    }
+
+    // ==================== 广告拦截 ====================
+
+    /** 广告/追踪域名列表 */
+    private val adDomains = setOf(
+        // Google 广告
+        "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+        "pagead2.googlesyndication.com", "adservice.google.com",
+        // "googletagservices.com", // 部分网站功能依赖
+        // 成人站常见广告网络
+        "juicyads.com", "juicyads.net",
+        "exoclick.com", "exosrv.com", "exdynsrv.com",
+        "trafficjunky.com", "trafficjunky.net",
+        "trafficfactory.biz",
+        "trafficstars.com",
+        "tsyndicate.com",
+        "realsrv.com",
+        "syndication.realsrv.com",
+        // 弹窗/重定向广告
+        "popads.net", "popcash.net", "popunder.net",
+        "propellerads.com", "propellerads.net", "propellerpops.com",
+        "clickadu.com", "clickaine.com",
+        "ad-maven.com", "ad-delivery.net",
+        "adtng.com", "adtng.net",
+        "hilltopads.net", "hilltopads.com",
+        "adxpansion.com",
+        "a-ads.com",
+        "cpmstar.com",
+        // 推送/通知广告
+        "pushwelcome.com", "pushame.com", "pushails.com",
+        "pushnest.com", "pushgroup.net",
+        // 内容推荐广告
+        "taboola.com", "taboolasyndication.com",
+        "outbrain.com", "mgid.com", "revcontent.com",
+        // 追踪
+        "adsco.re", "adskeeper.co.uk", "adnium.com",
+        "bidgear.com", "advertising.com",
+        // 其他常见广告
+        "acint.net", "dmp.theadex.com",
+        "dischub.com", "s-bid.com",
+        // missav 相关广告
+        "magsrv.com", "myavlive.com", "bluetrafficstream.com",
+        "xxxvjmp.com", "mavrtracktor.com"
+    )
+
+    private fun isAdHost(host: String): Boolean {
+        return adDomains.any { domain ->
+            host == domain || host.endsWith(".$domain")
         }
     }
 
@@ -1033,6 +1208,23 @@ class MainActivity : AppCompatActivity() {
 
     // ==================== 网页内搜索 ====================
 
+    private fun setupKeyboardListener() {
+        val rootView = binding.root
+        rootView.viewTreeObserver.addOnGlobalLayoutListener {
+            val rect = android.graphics.Rect()
+            rootView.getWindowVisibleDisplayFrame(rect)
+            val screenHeight = rootView.rootView.height
+            val keypadHeight = screenHeight - rect.bottom
+            if (keypadHeight > screenHeight * 0.15) {
+                // 键盘弹出
+                binding.bottomBar.visibility = View.GONE
+            } else {
+                // 键盘收起
+                binding.bottomBar.visibility = View.VISIBLE
+            }
+        }
+    }
+
     private fun setupFindInPage() {
         binding.etFindInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH) {
@@ -1091,6 +1283,19 @@ class MainActivity : AppCompatActivity() {
 
     @Deprecated("Use OnBackPressedCallback")
     override fun onBackPressed() {
+        // 全屏视频时按返回键退出全屏
+        if (customView != null) {
+            customViewCallback?.onCustomViewHidden()
+            binding.customViewContainer.removeView(customView)
+            binding.customViewContainer.visibility = View.GONE
+            binding.mainContent.visibility = View.VISIBLE
+            customView = null
+            customViewCallback = null
+            requestedOrientation = originalOrientation
+            window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+            return
+        }
         if (binding.findBar.visibility == View.VISIBLE) {
             hideFindBar()
         } else if (speedDialAdapter.moveMode) {
