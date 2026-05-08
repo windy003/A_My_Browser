@@ -303,7 +303,20 @@ object FaviconProvider {
             return
         }
 
-        // 先显示占位图，然后异步解析 link 标签图标
+        // 有缓存的图标 URL → 直接用，Glide 磁盘缓存命中则不联网
+        val cachedIcons = linkIconCache.get(domain)
+        if (cachedIcons != null && cachedIcons.isNotEmpty()) {
+            Glide.with(imageView.context)
+                .load(cachedIcons.first())
+                .transform(CenterCrop(), RoundedCorners(24))
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .placeholder(R.drawable.ic_speed_dial_default)
+                .error(R.drawable.ic_speed_dial_default)
+                .into(imageView)
+            return
+        }
+
+        // 没有缓存，走完整降级链（首次加载）
         imageView.setImageResource(R.drawable.ic_speed_dial_default)
 
         CoroutineScope(Dispatchers.Main).launch {
@@ -339,6 +352,20 @@ object FaviconProvider {
             return
         }
 
+        // 有缓存的图标 URL → 直接用
+        val cachedIcons = linkIconCache.get(domain)
+        if (cachedIcons != null && cachedIcons.isNotEmpty()) {
+            Glide.with(imageView.context)
+                .load(cachedIcons.first())
+                .circleCrop()
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .placeholder(android.R.drawable.ic_menu_compass)
+                .error(android.R.drawable.ic_menu_compass)
+                .into(imageView)
+            return
+        }
+
+        // 没有缓存，走完整降级链
         imageView.setImageResource(android.R.drawable.ic_menu_compass)
 
         CoroutineScope(Dispatchers.Main).launch {
