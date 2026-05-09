@@ -5,10 +5,15 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.util.LruCache
 import android.widget.ImageView
+import android.graphics.drawable.Drawable
 import com.bumptech.glide.Glide
+import com.bumptech.glide.load.DataSource
 import com.bumptech.glide.load.engine.DiskCacheStrategy
+import com.bumptech.glide.load.engine.GlideException
 import com.bumptech.glide.load.resource.bitmap.CenterCrop
 import com.bumptech.glide.load.resource.bitmap.RoundedCorners
+import com.bumptech.glide.request.RequestListener
+import com.bumptech.glide.request.target.Target
 import com.swiftbrowser.R
 import kotlinx.coroutines.*
 import java.net.HttpURLConnection
@@ -32,19 +37,30 @@ object FaviconProvider {
      */
     private val linkIconCache = LruCache<String, List<String>>(200)
 
+    /** 缓存每个域名最终成功加载的图标 URL，重启后直接用，无需重跑降级链 */
+    private val resolvedIconCache = LruCache<String, String>(200)
+
     private const val PREFS_NAME = "favicon_link_cache"
+    private const val PREFS_RESOLVED = "favicon_resolved_cache"
     private const val SEPARATOR = "\u001F" // 单元分隔符，用于拼接 URL 列表
     private var prefs: SharedPreferences? = null
+    private var resolvedPrefs: SharedPreferences? = null
 
     /**
      * 初始化持久化缓存，在 Application.onCreate 中调用
      */
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        resolvedPrefs = context.getSharedPreferences(PREFS_RESOLVED, Context.MODE_PRIVATE)
         // 从 SharedPreferences 恢复到内存缓存
         prefs?.all?.forEach { (domain, value) ->
             if (value is String && value.isNotEmpty()) {
                 linkIconCache.put(domain, value.split(SEPARATOR))
+            }
+        }
+        resolvedPrefs?.all?.forEach { (domain, value) ->
+            if (value is String && value.isNotEmpty()) {
+                resolvedIconCache.put(domain, value)
             }
         }
     }
@@ -56,12 +72,20 @@ object FaviconProvider {
         prefs?.edit()?.putString(domain, urls.joinToString(SEPARATOR))?.apply()
     }
 
+    /** 记录某个域名最终成功加载的图标 URL */
+    private fun saveResolvedIcon(domain: String, url: String) {
+        resolvedIconCache.put(domain, url)
+        resolvedPrefs?.edit()?.putString(domain, url)?.apply()
+    }
+
     /**
      * 清除内存和磁盘中的 link 图标缓存，配合 Glide 缓存清理实现完整刷新
      */
     fun clearLinkIconCache() {
         linkIconCache.evictAll()
+        resolvedIconCache.evictAll()
         prefs?.edit()?.clear()?.apply()
+        resolvedPrefs?.edit()?.clear()?.apply()
     }
 
     // ==================== 域名提取 ====================
@@ -81,6 +105,20 @@ object FaviconProvider {
         } catch (e: Exception) {
             null
         }
+    }
+
+    /**
+     * 获取页面所在目录的 URL（去掉文件名部分）
+     * 如 https://example.com/repo/page.html -> https://example.com/repo
+     */
+    private fun getPageDir(url: String): String {
+        val uri = Uri.parse(url)
+        val path = uri.path ?: return getBaseUrl(url) ?: url
+        val lastSlash = path.lastIndexOf('/')
+        val dirPath = if (lastSlash > 0) path.substring(0, lastSlash) else ""
+        val port = uri.port
+        val hostPort = if (port != -1 && port != 80 && port != 443) "${uri.host}:$port" else "${uri.host}"
+        return "${uri.scheme}://$hostPort$dirPath"
     }
 
     private fun getBaseUrl(url: String): String? {
@@ -140,8 +178,9 @@ object FaviconProvider {
         return withContext(Dispatchers.IO) {
             try {
                 val baseUrl = getBaseUrl(pageUrl) ?: return@withContext emptyList()
-                val html = fetchHead(baseUrl)
-                val icons = parseIcons(html, baseUrl)
+                val html = fetchHead(pageUrl)
+                val pageDir = getPageDir(pageUrl)
+                val icons = parseIcons(html, baseUrl, pageDir)
 
                 // 排序：apple-touch-icon 优先，然后按分辨率从高到低
                 val sorted = icons.sortedWith(
@@ -195,7 +234,7 @@ object FaviconProvider {
     /**
      * 解析 HTML 中的 <link rel="apple-touch-icon"...> 和 <link rel="icon"...>
      */
-    private fun parseIcons(html: String, baseUrl: String): List<LinkIcon> {
+    private fun parseIcons(html: String, baseUrl: String, pageDir: String? = null): List<LinkIcon> {
         val result = mutableListOf<LinkIcon>()
 
         // 匹配所有 <link ... > 标签
@@ -220,7 +259,7 @@ object FaviconProvider {
 
             // 提取 href
             val href = extractAttr(tag, "href") ?: continue
-            val fullUrl = resolveUrl(href, baseUrl)
+            val fullUrl = resolveUrl(href, baseUrl, pageDir)
 
             // 提取 sizes（如 "180x180"、"32x32"）
             val sizesStr = extractAttr(tag, "sizes")
@@ -262,13 +301,15 @@ object FaviconProvider {
 
     /**
      * 将可能的相对路径转为绝对路径
+     * @param baseUrl 域名根 URL（如 https://example.com）
+     * @param pageDir 页面所在目录 URL（如 https://example.com/repo/），用于解析 ./ 开头的相对路径
      */
-    private fun resolveUrl(href: String, baseUrl: String): String {
+    private fun resolveUrl(href: String, baseUrl: String, pageDir: String? = null): String {
         return when {
             href.startsWith("http://") || href.startsWith("https://") -> href
             href.startsWith("//") -> "https:$href"
             href.startsWith("/") -> "$baseUrl$href"
-            else -> "$baseUrl/$href"
+            else -> "${pageDir ?: baseUrl}/$href"
         }
     }
 
@@ -303,15 +344,34 @@ object FaviconProvider {
             return
         }
 
-        // 有缓存的图标 URL → 直接用，Glide 磁盘缓存命中则不联网
-        val cachedIcons = linkIconCache.get(domain)
-        if (cachedIcons != null && cachedIcons.isNotEmpty()) {
+        // 优先用上次成功加载的图标 URL（Glide 磁盘缓存命中则不联网，极快）
+        val resolvedUrl = resolvedIconCache.get(domain)
+        if (resolvedUrl != null) {
+            // 失败时降级到 Brandfetch → DuckDuckGo → Google → 默认
+            val googleFallback = Glide.with(imageView.context)
+                .load(getGoogleFaviconUrl(domain))
+                .transform(CenterCrop(), RoundedCorners(24))
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .error(R.drawable.ic_speed_dial_default)
+
+            val ddgFallback = Glide.with(imageView.context)
+                .load(getDuckDuckGoUrl(domain))
+                .transform(CenterCrop(), RoundedCorners(24))
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .error(googleFallback)
+
+            val brandfetchFallback = Glide.with(imageView.context)
+                .load(getBrandfetchUrl(domain))
+                .transform(CenterCrop(), RoundedCorners(24))
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .error(ddgFallback)
+
             Glide.with(imageView.context)
-                .load(cachedIcons.first())
+                .load(resolvedUrl)
                 .transform(CenterCrop(), RoundedCorners(24))
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
                 .placeholder(R.drawable.ic_speed_dial_default)
-                .error(R.drawable.ic_speed_dial_default)
+                .error(brandfetchFallback)
                 .into(imageView)
             return
         }
@@ -352,15 +412,27 @@ object FaviconProvider {
             return
         }
 
-        // 有缓存的图标 URL → 直接用
-        val cachedIcons = linkIconCache.get(domain)
-        if (cachedIcons != null && cachedIcons.isNotEmpty()) {
+        // 优先用上次成功加载的图标 URL
+        val resolvedUrl = resolvedIconCache.get(domain)
+        if (resolvedUrl != null) {
+            val googleFallback = Glide.with(imageView.context)
+                .load(getGoogleFaviconUrl(domain))
+                .circleCrop()
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .error(android.R.drawable.ic_menu_compass)
+
+            val ddgFallback = Glide.with(imageView.context)
+                .load(getDuckDuckGoUrl(domain))
+                .circleCrop()
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .error(googleFallback)
+
             Glide.with(imageView.context)
-                .load(cachedIcons.first())
+                .load(resolvedUrl)
                 .circleCrop()
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
                 .placeholder(android.R.drawable.ic_menu_compass)
-                .error(android.R.drawable.ic_menu_compass)
+                .error(ddgFallback)
                 .into(imageView)
             return
         }
@@ -390,55 +462,75 @@ object FaviconProvider {
                          else android.R.drawable.ic_menu_compass
         val isIp = isIpAddress(domain)
 
+        // 每一层都加 listener，记录最终成功加载的图标 URL
+        val successListener = object : RequestListener<Drawable> {
+            override fun onLoadFailed(
+                e: GlideException?, model: Any?, target: Target<Drawable>, isFirstResource: Boolean
+            ): Boolean = false
+
+            override fun onResourceReady(
+                resource: Drawable, model: Any, target: Target<Drawable>,
+                dataSource: DataSource, isFirstResource: Boolean
+            ): Boolean {
+                val url = model as? String
+                if (url != null) {
+                    saveResolvedIcon(domain, url)
+                }
+                return false
+            }
+        }
+
         // 从最低优先级开始，向外包装 error() 降级
         var request = if (isIp && baseUrl != null) {
-            // IP 地址：最内层用 /favicon.ico
             Glide.with(imageView.context)
                 .load("${baseUrl}/favicon.ico")
                 .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .listener(successListener)
                 .error(defaultRes)
         } else {
-            // 域名：最内层 Google Favicon -> 默认
             val googleRequest = Glide.with(imageView.context)
                 .load(getGoogleFaviconUrl(domain))
                 .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .listener(successListener)
                 .error(defaultRes)
 
-            // DuckDuckGo -> (Google -> 默认)
             Glide.with(imageView.context)
                 .load(getDuckDuckGoUrl(domain))
                 .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .listener(successListener)
                 .error(googleRequest)
         }
 
-        // link 标签图标，从分辨率最低的开始包装（最高分辨率在最外层最先尝试）
+        // link 标签图标，从分辨率最低的开始包装
         for (iconUrl in linkIcons.reversed()) {
             request = Glide.with(imageView.context)
                 .load(iconUrl)
                 .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .listener(successListener)
                 .error(request)
         }
 
         if (isIp) {
-            // IP 地址：link 标签 -> /favicon.ico -> 默认
+            val topUrl = if (linkIcons.isNotEmpty()) linkIcons.first() else "${baseUrl}/favicon.ico"
             Glide.with(imageView.context)
-                .load(if (linkIcons.isNotEmpty()) linkIcons.first() else "${baseUrl}/favicon.ico")
+                .load(topUrl)
                 .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
                 .placeholder(defaultRes)
+                .listener(successListener)
                 .error(request)
                 .into(imageView)
         } else {
-            // 域名：Brandfetch -> (link 标签 -> DuckDuckGo -> Google -> 默认)
             Glide.with(imageView.context)
                 .load(getBrandfetchUrl(domain, if (isSpeedDial) 256 else 128))
                 .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
                 .placeholder(defaultRes)
+                .listener(successListener)
                 .error(request)
                 .into(imageView)
         }
