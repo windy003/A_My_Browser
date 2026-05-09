@@ -15,6 +15,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import java.io.File
 import android.view.DragEvent
 import android.view.MotionEvent
 import android.view.View
@@ -584,27 +585,48 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startDownload(url: String, contentDisposition: String?, mimeType: String?, fileName: String) {
+        // 如果同名文件已存在，自动加编号: app(1).apk, app(2).apk ...
+        val actualFileName = getUniqueFileName(fileName)
+
         val request = DownloadManager.Request(Uri.parse(url)).apply {
             setMimeType(mimeType)
             addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url) ?: "")
-            setTitle(fileName)
-            setDescription(fileName)
+            setTitle(actualFileName)
+            setDescription(actualFileName)
             setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, actualFileName)
         }
         val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
         dm.enqueue(request)
-        // 保存下载记录
+        // 保存下载记录（用实际文件名）
         lifecycleScope.launch {
             app.database.downloadRecordDao().insert(
                 com.swiftbrowser.data.entity.DownloadRecord(
-                    fileName = fileName,
+                    fileName = actualFileName,
                     url = url,
                     mimeType = mimeType
                 )
             )
         }
-        Toast.makeText(this, getString(R.string.download_started, fileName), Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, getString(R.string.download_started, actualFileName), Toast.LENGTH_SHORT).show()
+    }
+
+    private fun getUniqueFileName(fileName: String): String {
+        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        var target = File(downloadsDir, fileName)
+        if (!target.exists()) return fileName
+
+        val dotIndex = fileName.lastIndexOf('.')
+        val baseName = if (dotIndex > 0) fileName.substring(0, dotIndex) else fileName
+        val extension = if (dotIndex > 0) fileName.substring(dotIndex) else ""
+
+        var counter = 1
+        while (true) {
+            val newName = "$baseName($counter)$extension"
+            target = File(downloadsDir, newName)
+            if (!target.exists()) return newName
+            counter++
+        }
     }
 
     // ==================== 广告拦截 ====================

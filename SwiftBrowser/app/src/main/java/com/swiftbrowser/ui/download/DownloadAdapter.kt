@@ -1,12 +1,8 @@
 package com.swiftbrowser.ui.download
 
-import android.app.DownloadManager
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.drawable.BitmapDrawable
+import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
-import android.net.Uri
 import android.os.Environment
 import android.text.format.DateUtils
 import android.view.LayoutInflater
@@ -22,7 +18,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileInputStream
 
 class DownloadAdapter(
     private val scope: CoroutineScope,
@@ -85,85 +80,21 @@ class DownloadAdapter(
     }
 
     private fun extractApkIcon(context: Context, fileName: String): Drawable? {
-        val pm = context.packageManager
-
-        // 优先通过 DownloadManager 获取真实文件路径（解决重命名问题）
-        try {
-            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            val query = DownloadManager.Query().setFilterByStatus(DownloadManager.STATUS_SUCCESSFUL)
-            dm.query(query)?.use { cursor ->
-                val titleCol = cursor.getColumnIndex(DownloadManager.COLUMN_TITLE)
-                val localUriCol = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
-                // 找最后一条匹配的（最新下载）
-                var matchedLocalUri: String? = null
-                while (cursor.moveToNext()) {
-                    if (cursor.getString(titleCol) == fileName) {
-                        matchedLocalUri = cursor.getString(localUriCol)
-                    }
-                }
-                if (matchedLocalUri != null) {
-                    val realPath = Uri.parse(matchedLocalUri).path
-                    if (realPath != null) {
-                        val icon = extractIconFromPath(pm, realPath, context)
-                        if (icon != null) return icon
-                    }
-                }
-            }
-        } catch (_: Exception) { }
-
-        // 回退：直接通过文件名尝试
         try {
             val apkFile = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
                 fileName
             )
-            if (apkFile.canRead()) {
-                val icon = extractIconFromPath(pm, apkFile.absolutePath, context)
-                if (icon != null) return icon
-            }
-        } catch (_: Exception) { }
-
-        return null
-    }
-
-    @Suppress("DiscouragedPrivateApi")
-    private fun extractIconFromPath(
-        pm: android.content.pm.PackageManager,
-        path: String,
-        context: Context
-    ): Drawable? {
-        val info = pm.getPackageArchiveInfo(path, 0) ?: return null
-        val appInfo = info.applicationInfo ?: return null
-        val iconResId = appInfo.icon
-        if (iconResId == 0) return null
-
-        // 直接从 APK 创建独立的 AssetManager + Resources，彻底绕过 PM 缓存
-        var raw: Drawable? = null
-        try {
-            val am = android.content.res.AssetManager::class.java.getDeclaredConstructor().newInstance()
-            val addAssetPath = android.content.res.AssetManager::class.java.getDeclaredMethod("addAssetPath", String::class.java)
-            addAssetPath.isAccessible = true
-            addAssetPath.invoke(am, path)
-            val res = android.content.res.Resources(am, context.resources.displayMetrics, context.resources.configuration)
-            raw = res.getDrawable(iconResId, null)
-        } catch (_: Exception) { }
-
-        // 回退到传统方式
-        if (raw == null) {
-            appInfo.sourceDir = path
-            appInfo.publicSourceDir = path
-            raw = appInfo.loadIcon(pm)
+            if (!apkFile.exists()) return null
+            val pm = context.packageManager
+            val info = pm.getPackageArchiveInfo(apkFile.absolutePath, 0) ?: return null
+            val appInfo = info.applicationInfo ?: return null
+            appInfo.sourceDir = apkFile.absolutePath
+            appInfo.publicSourceDir = apkFile.absolutePath
+            return appInfo.loadIcon(pm)
+        } catch (_: Exception) {
+            return null
         }
-        if (raw == null) return null
-
-        val size = (48 * context.resources.displayMetrics.density).toInt()
-        val w = if (raw.intrinsicWidth > 0) raw.intrinsicWidth else size
-        val h = if (raw.intrinsicHeight > 0) raw.intrinsicHeight else size
-        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        raw.setBounds(0, 0, w, h)
-        raw.draw(canvas)
-        return BitmapDrawable(context.resources, bitmap)
     }
 
     class DiffCallback : DiffUtil.ItemCallback<DownloadRecord>() {
