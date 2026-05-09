@@ -710,10 +710,10 @@ class BookmarkActivity : AppCompatActivity() {
                         }
 
                         btnUpload.setOnClickListener {
-                            performUploadSync(compareDialog)
+                            performIncrementalUpload(onlyLocal, compareDialog)
                         }
                         btnDownload.setOnClickListener {
-                            performDownloadSync(compareDialog)
+                            performIncrementalDownload(onlyCloud, compareDialog)
                         }
 
                         addView(btnUpload)
@@ -739,17 +739,28 @@ class BookmarkActivity : AppCompatActivity() {
         }
     }
 
-    private fun performUploadSync(parentDialog: AlertDialog? = null) {
+    private fun performIncrementalUpload(
+        onlyLocal: List<Bookmark>,
+        parentDialog: AlertDialog? = null
+    ) {
         val cloudSync = app.cloudSyncManager
         if (!cloudSync.isLoggedIn) {
             Toast.makeText(this, "请先登录云端账号", Toast.LENGTH_SHORT).show()
             return
         }
-        Toast.makeText(this, "正在上传...", Toast.LENGTH_SHORT).show()
+        if (onlyLocal.isEmpty()) {
+            Toast.makeText(this, "没有需要上传的书签", Toast.LENGTH_SHORT).show()
+            return
+        }
+        Toast.makeText(this, "正在增量上传 ${onlyLocal.size} 条...", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             try {
-                withContext(Dispatchers.IO) { cloudSync.uploadBookmarks() }
-                Toast.makeText(this@BookmarkActivity, "上传成功", Toast.LENGTH_SHORT).show()
+                withContext(Dispatchers.IO) {
+                    for (bookmark in onlyLocal) {
+                        cloudSync.uploadSingleBookmark(bookmark)
+                    }
+                }
+                Toast.makeText(this@BookmarkActivity, "增量上传成功（${onlyLocal.size} 条）", Toast.LENGTH_SHORT).show()
                 parentDialog?.dismiss()
                 compareWithCloud()
             } catch (e: Exception) {
@@ -758,17 +769,42 @@ class BookmarkActivity : AppCompatActivity() {
         }
     }
 
-    private fun performDownloadSync(parentDialog: AlertDialog? = null) {
+    private fun performIncrementalDownload(
+        onlyCloud: List<CloudSyncManager.CloudBookmark>,
+        parentDialog: AlertDialog? = null
+    ) {
         val cloudSync = app.cloudSyncManager
         if (!cloudSync.isLoggedIn) {
             Toast.makeText(this, "请先登录云端账号", Toast.LENGTH_SHORT).show()
             return
         }
-        Toast.makeText(this, "正在下载...", Toast.LENGTH_SHORT).show()
+        if (onlyCloud.isEmpty()) {
+            Toast.makeText(this, "没有需要下载的书签", Toast.LENGTH_SHORT).show()
+            return
+        }
+        Toast.makeText(this, "正在增量下载 ${onlyCloud.size} 条...", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             try {
-                withContext(Dispatchers.IO) { cloudSync.downloadBookmarks() }
-                Toast.makeText(this@BookmarkActivity, "下载成功", Toast.LENGTH_SHORT).show()
+                val parentId = currentFolder?.id
+                var maxPos = if (parentId != null) {
+                    bookmarkDao.getMaxPosition(parentId) ?: -1
+                } else {
+                    bookmarkDao.getMaxPositionRoot() ?: -1
+                }
+                for (cloud in onlyCloud) {
+                    maxPos++
+                    bookmarkDao.insert(
+                        Bookmark(
+                            title = cloud.title,
+                            url = cloud.url,
+                            isFolder = false,
+                            parentId = parentId,
+                            position = maxPos,
+                            favicon = cloud.favicon
+                        )
+                    )
+                }
+                Toast.makeText(this@BookmarkActivity, "增量下载成功（${onlyCloud.size} 条）", Toast.LENGTH_SHORT).show()
                 loadCurrentFolder()
                 parentDialog?.dismiss()
                 compareWithCloud()
