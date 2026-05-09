@@ -701,11 +701,11 @@ class BookmarkActivity : AppCompatActivity() {
                         setPadding(16, 8, 16, 8)
 
                         val btnUpload = android.widget.Button(this@BookmarkActivity).apply {
-                            text = "同步到云端"
+                            text = "增量同步到云端"
                             layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                         }
                         val btnDownload = android.widget.Button(this@BookmarkActivity).apply {
-                            text = "同步到本地"
+                            text = "增量同步到本地"
                             layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                         }
 

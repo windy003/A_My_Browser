@@ -2,7 +2,11 @@ package com.swiftbrowser.ui.download
 
 import android.app.DownloadManager
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.net.Uri
 import android.os.Environment
 import android.text.format.DateUtils
 import android.view.LayoutInflater
@@ -25,7 +29,7 @@ class DownloadAdapter(
     private val onApkClick: (DownloadRecord) -> Unit
 ) : ListAdapter<DownloadRecord, DownloadAdapter.ViewHolder>(DiffCallback()) {
 
-    private val iconCache = mutableMapOf<String, Drawable?>()
+    private val iconCache = mutableMapOf<Long, Drawable?>()
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val binding = ItemDownloadBinding.inflate(LayoutInflater.from(parent.context), parent, false)
@@ -50,25 +54,23 @@ class DownloadAdapter(
             )
 
             val isApk = record.fileName.endsWith(".apk", ignoreCase = true)
+            binding.ivIcon.tag = record.id
 
             if (isApk) {
-                val cached = iconCache[record.fileName]
+                val cached = iconCache[record.id]
                 if (cached != null) {
                     binding.ivIcon.setImageDrawable(cached)
-                } else if (iconCache.containsKey(record.fileName)) {
-                    binding.ivIcon.setImageResource(R.drawable.ic_apk)
                 } else {
                     binding.ivIcon.setImageResource(R.drawable.ic_apk)
-                    val fileName = record.fileName
-                    scope.launch {
-                        val icon = withContext(Dispatchers.IO) {
-                            extractApkIcon(binding.root.context, fileName)
-                        }
-                        iconCache[fileName] = icon
-                        if (bindingAdapterPosition != RecyclerView.NO_POSITION
-                            && getItem(bindingAdapterPosition).fileName == fileName
-                        ) {
-                            if (icon != null) {
+                    if (!iconCache.containsKey(record.id)) {
+                        val recordId = record.id
+                        val fileName = record.fileName
+                        scope.launch {
+                            val icon = withContext(Dispatchers.IO) {
+                                extractApkIcon(binding.root.context, fileName)
+                            }
+                            iconCache[recordId] = icon
+                            if (binding.ivIcon.tag == recordId && icon != null) {
                                 binding.ivIcon.setImageDrawable(icon)
                             }
                         }
@@ -85,57 +87,83 @@ class DownloadAdapter(
     private fun extractApkIcon(context: Context, fileName: String): Drawable? {
         val pm = context.packageManager
 
-        // 方式1：直接通过文件路径
+        // 优先通过 DownloadManager 获取真实文件路径（解决重命名问题）
+        try {
+            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val query = DownloadManager.Query().setFilterByStatus(DownloadManager.STATUS_SUCCESSFUL)
+            dm.query(query)?.use { cursor ->
+                val titleCol = cursor.getColumnIndex(DownloadManager.COLUMN_TITLE)
+                val localUriCol = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
+                // 找最后一条匹配的（最新下载）
+                var matchedLocalUri: String? = null
+                while (cursor.moveToNext()) {
+                    if (cursor.getString(titleCol) == fileName) {
+                        matchedLocalUri = cursor.getString(localUriCol)
+                    }
+                }
+                if (matchedLocalUri != null) {
+                    val realPath = Uri.parse(matchedLocalUri).path
+                    if (realPath != null) {
+                        val icon = extractIconFromPath(pm, realPath, context)
+                        if (icon != null) return icon
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+
+        // 回退：直接通过文件名尝试
         try {
             val apkFile = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
                 fileName
             )
             if (apkFile.canRead()) {
-                val icon = extractIconFromPath(pm, apkFile.absolutePath)
+                val icon = extractIconFromPath(pm, apkFile.absolutePath, context)
                 if (icon != null) return icon
-            }
-        } catch (_: Exception) { }
-
-        // 方式2：通过 DownloadManager 打开文件，复制到缓存目录后提取
-        try {
-            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            val query = DownloadManager.Query().setFilterByStatus(DownloadManager.STATUS_SUCCESSFUL)
-            dm.query(query)?.use { cursor ->
-                val titleCol = cursor.getColumnIndex(DownloadManager.COLUMN_TITLE)
-                val idCol = cursor.getColumnIndex(DownloadManager.COLUMN_ID)
-                while (cursor.moveToNext()) {
-                    if (cursor.getString(titleCol) == fileName) {
-                        val downloadId = cursor.getLong(idCol)
-                        val tempFile = File(context.cacheDir, "temp_apk_icon.apk")
-                        try {
-                            dm.openDownloadedFile(downloadId).use { pfd ->
-                                FileInputStream(pfd.fileDescriptor).use { input ->
-                                    tempFile.outputStream().use { output ->
-                                        input.copyTo(output)
-                                    }
-                                }
-                            }
-                            val icon = extractIconFromPath(pm, tempFile.absolutePath)
-                            if (icon != null) return icon
-                        } finally {
-                            tempFile.delete()
-                        }
-                        break
-                    }
-                }
             }
         } catch (_: Exception) { }
 
         return null
     }
 
-    private fun extractIconFromPath(pm: android.content.pm.PackageManager, path: String): Drawable? {
+    @Suppress("DiscouragedPrivateApi")
+    private fun extractIconFromPath(
+        pm: android.content.pm.PackageManager,
+        path: String,
+        context: Context
+    ): Drawable? {
         val info = pm.getPackageArchiveInfo(path, 0) ?: return null
         val appInfo = info.applicationInfo ?: return null
-        appInfo.sourceDir = path
-        appInfo.publicSourceDir = path
-        return appInfo.loadIcon(pm)
+        val iconResId = appInfo.icon
+        if (iconResId == 0) return null
+
+        // 直接从 APK 创建独立的 AssetManager + Resources，彻底绕过 PM 缓存
+        var raw: Drawable? = null
+        try {
+            val am = android.content.res.AssetManager::class.java.getDeclaredConstructor().newInstance()
+            val addAssetPath = android.content.res.AssetManager::class.java.getDeclaredMethod("addAssetPath", String::class.java)
+            addAssetPath.isAccessible = true
+            addAssetPath.invoke(am, path)
+            val res = android.content.res.Resources(am, context.resources.displayMetrics, context.resources.configuration)
+            raw = res.getDrawable(iconResId, null)
+        } catch (_: Exception) { }
+
+        // 回退到传统方式
+        if (raw == null) {
+            appInfo.sourceDir = path
+            appInfo.publicSourceDir = path
+            raw = appInfo.loadIcon(pm)
+        }
+        if (raw == null) return null
+
+        val size = (48 * context.resources.displayMetrics.density).toInt()
+        val w = if (raw.intrinsicWidth > 0) raw.intrinsicWidth else size
+        val h = if (raw.intrinsicHeight > 0) raw.intrinsicHeight else size
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        raw.setBounds(0, 0, w, h)
+        raw.draw(canvas)
+        return BitmapDrawable(context.resources, bitmap)
     }
 
     class DiffCallback : DiffUtil.ItemCallback<DownloadRecord>() {
