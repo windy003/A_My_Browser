@@ -1,6 +1,8 @@
 package com.swiftbrowser.ui.download
 
-import android.content.pm.PackageManager
+import android.app.DownloadManager
+import android.content.Context
+import android.graphics.drawable.Drawable
 import android.os.Environment
 import android.text.format.DateUtils
 import android.view.LayoutInflater
@@ -11,11 +13,19 @@ import androidx.recyclerview.widget.RecyclerView
 import com.swiftbrowser.R
 import com.swiftbrowser.data.entity.DownloadRecord
 import com.swiftbrowser.databinding.ItemDownloadBinding
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileInputStream
 
 class DownloadAdapter(
+    private val scope: CoroutineScope,
     private val onApkClick: (DownloadRecord) -> Unit
 ) : ListAdapter<DownloadRecord, DownloadAdapter.ViewHolder>(DiffCallback()) {
+
+    private val iconCache = mutableMapOf<String, Drawable?>()
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val binding = ItemDownloadBinding.inflate(LayoutInflater.from(parent.context), parent, false)
@@ -42,19 +52,27 @@ class DownloadAdapter(
             val isApk = record.fileName.endsWith(".apk", ignoreCase = true)
 
             if (isApk) {
-                val apkPath = File(
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                    record.fileName
-                ).absolutePath
-                val pm = binding.root.context.packageManager
-                val info = pm.getPackageArchiveInfo(apkPath, PackageManager.GET_ACTIVITIES)
-                if (info != null) {
-                    info.applicationInfo?.sourceDir = apkPath
-                    info.applicationInfo?.publicSourceDir = apkPath
-                    val icon = info.applicationInfo?.loadIcon(pm)
-                    binding.ivIcon.setImageDrawable(icon)
+                val cached = iconCache[record.fileName]
+                if (cached != null) {
+                    binding.ivIcon.setImageDrawable(cached)
+                } else if (iconCache.containsKey(record.fileName)) {
+                    binding.ivIcon.setImageResource(R.drawable.ic_apk)
                 } else {
                     binding.ivIcon.setImageResource(R.drawable.ic_apk)
+                    val fileName = record.fileName
+                    scope.launch {
+                        val icon = withContext(Dispatchers.IO) {
+                            extractApkIcon(binding.root.context, fileName)
+                        }
+                        iconCache[fileName] = icon
+                        if (bindingAdapterPosition != RecyclerView.NO_POSITION
+                            && getItem(bindingAdapterPosition).fileName == fileName
+                        ) {
+                            if (icon != null) {
+                                binding.ivIcon.setImageDrawable(icon)
+                            }
+                        }
+                    }
                 }
                 binding.root.setOnClickListener { onApkClick(record) }
             } else {
@@ -62,6 +80,62 @@ class DownloadAdapter(
                 binding.root.setOnClickListener(null)
             }
         }
+    }
+
+    private fun extractApkIcon(context: Context, fileName: String): Drawable? {
+        val pm = context.packageManager
+
+        // 方式1：直接通过文件路径
+        try {
+            val apkFile = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                fileName
+            )
+            if (apkFile.canRead()) {
+                val icon = extractIconFromPath(pm, apkFile.absolutePath)
+                if (icon != null) return icon
+            }
+        } catch (_: Exception) { }
+
+        // 方式2：通过 DownloadManager 打开文件，复制到缓存目录后提取
+        try {
+            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val query = DownloadManager.Query().setFilterByStatus(DownloadManager.STATUS_SUCCESSFUL)
+            dm.query(query)?.use { cursor ->
+                val titleCol = cursor.getColumnIndex(DownloadManager.COLUMN_TITLE)
+                val idCol = cursor.getColumnIndex(DownloadManager.COLUMN_ID)
+                while (cursor.moveToNext()) {
+                    if (cursor.getString(titleCol) == fileName) {
+                        val downloadId = cursor.getLong(idCol)
+                        val tempFile = File(context.cacheDir, "temp_apk_icon.apk")
+                        try {
+                            dm.openDownloadedFile(downloadId).use { pfd ->
+                                FileInputStream(pfd.fileDescriptor).use { input ->
+                                    tempFile.outputStream().use { output ->
+                                        input.copyTo(output)
+                                    }
+                                }
+                            }
+                            val icon = extractIconFromPath(pm, tempFile.absolutePath)
+                            if (icon != null) return icon
+                        } finally {
+                            tempFile.delete()
+                        }
+                        break
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+
+        return null
+    }
+
+    private fun extractIconFromPath(pm: android.content.pm.PackageManager, path: String): Drawable? {
+        val info = pm.getPackageArchiveInfo(path, 0) ?: return null
+        val appInfo = info.applicationInfo ?: return null
+        appInfo.sourceDir = path
+        appInfo.publicSourceDir = path
+        return appInfo.loadIcon(pm)
     }
 
     class DiffCallback : DiffUtil.ItemCallback<DownloadRecord>() {
