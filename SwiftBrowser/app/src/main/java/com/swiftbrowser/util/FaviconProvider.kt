@@ -322,23 +322,6 @@ object FaviconProvider {
     fun loadSpeedDialIcon(imageView: ImageView, url: String, customIconUrl: String? = null) {
         val domain = extractDomain(url)
 
-        // 如果用户指定了自定义图标，直接用
-        if (customIconUrl != null) {
-            Glide.with(imageView.context)
-                .load(customIconUrl)
-                .transform(CenterCrop(), RoundedCorners(24))
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .placeholder(R.drawable.ic_speed_dial_default)
-                .error(
-                    Glide.with(imageView.context)
-                        .load(domain?.let { getBrandfetchUrl(it) })
-                        .transform(CenterCrop(), RoundedCorners(24))
-                        .error(R.drawable.ic_speed_dial_default)
-                )
-                .into(imageView)
-            return
-        }
-
         if (domain == null) {
             imageView.setImageResource(R.drawable.ic_speed_dial_default)
             return
