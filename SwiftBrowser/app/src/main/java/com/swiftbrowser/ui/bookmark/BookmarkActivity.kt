@@ -771,24 +771,19 @@ class BookmarkActivity : AppCompatActivity() {
                         orientation = android.widget.LinearLayout.HORIZONTAL
                         setPadding(16, 8, 16, 8)
 
-                        val btnUpload = android.widget.Button(this@BookmarkActivity).apply {
-                            text = "增量同步到云端"
-                            layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                        }
-                        val btnDownload = android.widget.Button(this@BookmarkActivity).apply {
-                            text = "增量同步到本地"
-                            layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                        }
-
-                        btnUpload.setOnClickListener {
-                            performIncrementalUpload(onlyLocal, compareDialog)
-                        }
-                        btnDownload.setOnClickListener {
-                            performIncrementalDownload(onlyCloud, compareDialog)
+                        val btnBidirectional = android.widget.Button(this@BookmarkActivity).apply {
+                            text = "增量双向同步"
+                            layoutParams = android.widget.LinearLayout.LayoutParams(
+                                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                            )
                         }
 
-                        addView(btnUpload)
-                        addView(btnDownload)
+                        btnBidirectional.setOnClickListener {
+                            performBidirectionalSync(onlyLocal, onlyCloud, compareDialog)
+                        }
+
+                        addView(btnBidirectional)
                     }
                     addView(btnBar)
                     addView(btnRefresh)
@@ -881,6 +876,59 @@ class BookmarkActivity : AppCompatActivity() {
                 compareWithCloud()
             } catch (e: Exception) {
                 Toast.makeText(this@BookmarkActivity, "下载失败: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun performBidirectionalSync(
+        onlyLocal: List<Bookmark>,
+        onlyCloud: List<CloudSyncManager.CloudBookmark>,
+        parentDialog: AlertDialog? = null
+    ) {
+        val cloudSync = app.cloudSyncManager
+        if (!cloudSync.isLoggedIn) {
+            Toast.makeText(this, "请先登录云端账号", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (onlyLocal.isEmpty() && onlyCloud.isEmpty()) {
+            Toast.makeText(this, "没有需要同步的书签", Toast.LENGTH_SHORT).show()
+            return
+        }
+        Toast.makeText(this, "正在双向同步：上传 ${onlyLocal.size} 条，下载 ${onlyCloud.size} 条...", Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    // 上传本地独有的书签到云端
+                    for (bookmark in onlyLocal) {
+                        cloudSync.uploadSingleBookmark(bookmark)
+                    }
+                    // 下载云端独有的书签到本地
+                    val parentId = currentFolder?.id
+                    var maxPos = if (parentId != null) {
+                        bookmarkDao.getMaxPosition(parentId) ?: -1
+                    } else {
+                        bookmarkDao.getMaxPositionRoot() ?: -1
+                    }
+                    for (cloud in onlyCloud) {
+                        maxPos++
+                        bookmarkDao.insert(
+                            Bookmark(
+                                title = cloud.title,
+                                url = cloud.url,
+                                isFolder = false,
+                                parentId = parentId,
+                                position = maxPos,
+                                favicon = cloud.favicon
+                            )
+                        )
+                    }
+                }
+                Toast.makeText(this@BookmarkActivity, "双向同步成功（上传 ${onlyLocal.size} 条，下载 ${onlyCloud.size} 条）", Toast.LENGTH_SHORT).show()
+                loadCurrentFolder()
+                parentDialog?.dismiss()
+                compareWithCloud()
+            } catch (e: Exception) {
+                Toast.makeText(this@BookmarkActivity, "同步失败: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
