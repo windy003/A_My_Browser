@@ -37,6 +37,15 @@
             android:textStyle="bold" />
 
         <ImageButton
+            android:id="@+id/btnSearch"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="搜索书签"
+            android:src="@drawable/ic_search"
+            android:tint="@color/white" />
+
+        <ImageButton
             android:id="@+id/btnCompare"
             android:layout_width="48dp"
             android:layout_height="48dp"
@@ -62,6 +71,43 @@
             android:contentDescription="@string/import_bookmarks"
             android:src="@drawable/ic_add"
             android:tint="@color/white" />
+
+    </LinearLayout>
+
+    <!-- 搜索栏 -->
+    <LinearLayout
+        android:id="@+id/searchBar"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:background="@color/white"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="12dp"
+        android:paddingEnd="8dp"
+        android:visibility="gone">
+
+        <EditText
+            android:id="@+id/etSearch"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_search"
+            android:hint="搜索书签标题或网址..."
+            android:imeOptions="actionSearch"
+            android:inputType="text"
+            android:maxLines="1"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:textSize="14sp" />
+
+        <ImageButton
+            android:id="@+id/btnSearchClose"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="关闭搜索"
+            android:src="@drawable/ic_close"
+            android:tint="@color/gray_medium" />
 
     </LinearLayout>
 

@@ -47,6 +47,37 @@ interface BookmarkDao {
     @Query("SELECT MAX(position) FROM bookmarks WHERE parentId IS NULL")
     suspend fun getMaxPositionRoot(): Int?
 
+    // ==================== 搜索 ====================
+
+    /** 在指定文件夹及其所有子文件夹中搜索书签（递归） */
+    @Query("""
+        WITH RECURSIVE folder_tree(id) AS (
+            SELECT id FROM bookmarks WHERE id = :folderId
+            UNION ALL
+            SELECT b.id FROM bookmarks b JOIN folder_tree ft ON b.parentId = ft.id WHERE b.isFolder = 1
+        )
+        SELECT * FROM bookmarks
+        WHERE (parentId IN (SELECT id FROM folder_tree) OR parentId = :folderId)
+          AND isFolder = 0
+          AND (title LIKE '%' || :query || '%' OR url LIKE '%' || :query || '%')
+        ORDER BY title ASC
+    """)
+    suspend fun searchInFolder(folderId: Long, query: String): List<Bookmark>
+
+    /** 在根目录及其所有子文件夹中搜索书签（递归） */
+    @Query("""
+        WITH RECURSIVE folder_tree(id) AS (
+            SELECT id FROM bookmarks WHERE parentId IS NULL AND isFolder = 1
+            UNION ALL
+            SELECT b.id FROM bookmarks b JOIN folder_tree ft ON b.parentId = ft.id WHERE b.isFolder = 1
+        )
+        SELECT * FROM bookmarks
+        WHERE isFolder = 0
+          AND (title LIKE '%' || :query || '%' OR url LIKE '%' || :query || '%')
+        ORDER BY title ASC
+    """)
+    suspend fun searchAll(query: String): List<Bookmark>
+
     // ==================== 增删改 ====================
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

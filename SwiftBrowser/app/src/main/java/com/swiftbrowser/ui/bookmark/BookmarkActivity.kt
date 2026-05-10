@@ -3,7 +3,10 @@ package com.swiftbrowser.ui.bookmark
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.ListView
@@ -47,6 +50,9 @@ class BookmarkActivity : AppCompatActivity() {
     // 当前活跃的 LiveData，用于在切换文件夹时移除旧观察者
     private var currentLiveData: LiveData<List<Bookmark>>? = null
 
+    // 搜索状态
+    private var isSearching = false
+
     // 文件选择器：导入 Chrome 书签
     private val importFileLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -69,7 +75,9 @@ class BookmarkActivity : AppCompatActivity() {
 
     private fun setupToolbar() {
         binding.btnBack.setOnClickListener {
-            if (folderStack.size > 1) {
+            if (isSearching) {
+                closeSearch()
+            } else if (folderStack.size > 1) {
                 folderStack.removeLast()
                 loadCurrentFolder()
             } else {
@@ -93,6 +101,69 @@ class BookmarkActivity : AppCompatActivity() {
             if (folder != null && !isSpeedDialFolder(folder)) {
                 showRenameDialog(folder)
             }
+        }
+
+        // 搜索按钮
+        binding.btnSearch.setOnClickListener { openSearch() }
+        binding.btnSearchClose.setOnClickListener { closeSearch() }
+
+        binding.etSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                val query = s?.toString()?.trim() ?: ""
+                performSearch(query)
+            }
+        })
+
+        binding.etSearch.setOnEditorActionListener { _, _, _ ->
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.hideSoftInputFromWindow(binding.etSearch.windowToken, 0)
+            true
+        }
+    }
+
+    private fun openSearch() {
+        isSearching = true
+        binding.searchBar.visibility = View.VISIBLE
+        binding.etSearch.requestFocus()
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.showSoftInput(binding.etSearch, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    private fun closeSearch() {
+        isSearching = false
+        binding.searchBar.visibility = View.GONE
+        binding.etSearch.text.clear()
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(binding.etSearch.windowToken, 0)
+        loadCurrentFolder()
+    }
+
+    private fun performSearch(query: String) {
+        if (query.isEmpty()) {
+            if (isSearching) {
+                // 搜索框为空时显示当前文件夹内容
+                loadCurrentFolder()
+            }
+            return
+        }
+        // 移除旧观察者
+        currentLiveData?.removeObservers(this)
+        currentLiveData = null
+
+        lifecycleScope.launch {
+            val results = withContext(Dispatchers.IO) {
+                val folder = currentFolder
+                if (folder != null) {
+                    bookmarkDao.searchInFolder(folder.id, query)
+                } else {
+                    bookmarkDao.searchAll(query)
+                }
+            }
+            adapter.submitList(results)
+            binding.tvEmpty.visibility = if (results.isEmpty()) View.VISIBLE else View.GONE
+            binding.rvBookmarks.visibility = if (results.isEmpty()) View.GONE else View.VISIBLE
         }
     }
 
