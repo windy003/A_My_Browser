@@ -327,43 +327,9 @@ object FaviconProvider {
             return
         }
 
-        // 优先用上次成功加载的图标 URL（Glide 磁盘缓存命中则不联网，极快）
-        val resolvedUrl = resolvedIconCache.get(domain)
-        if (resolvedUrl != null) {
-            // 失败时降级到 Brandfetch → DuckDuckGo → Google → 默认
-            val googleFallback = Glide.with(imageView.context)
-                .load(getGoogleFaviconUrl(domain))
-                .transform(CenterCrop(), RoundedCorners(24))
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .error(R.drawable.ic_speed_dial_default)
-
-            val ddgFallback = Glide.with(imageView.context)
-                .load(getDuckDuckGoUrl(domain))
-                .transform(CenterCrop(), RoundedCorners(24))
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .error(googleFallback)
-
-            val brandfetchFallback = Glide.with(imageView.context)
-                .load(getBrandfetchUrl(domain))
-                .transform(CenterCrop(), RoundedCorners(24))
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .error(ddgFallback)
-
-            Glide.with(imageView.context)
-                .load(resolvedUrl)
-                .transform(CenterCrop(), RoundedCorners(24))
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .placeholder(R.drawable.ic_speed_dial_default)
-                .error(brandfetchFallback)
-                .into(imageView)
-            return
-        }
-
-        // 没有缓存，走完整降级链（首次加载）
-        imageView.setImageResource(R.drawable.ic_speed_dial_default)
-
         CoroutineScope(Dispatchers.Main).launch {
-            val linkIcons = resolveIconsFromHtml(url)
+            val resolvedUrl = resolvedIconCache.get(domain)
+            val linkIcons = if (resolvedUrl != null) listOf(resolvedUrl) else resolveIconsFromHtml(url)
             loadWithFallbackChain(imageView, domain, linkIcons, isSpeedDial = true, baseUrl = getBaseUrl(url))
         }
     }
@@ -379,36 +345,9 @@ object FaviconProvider {
             return
         }
 
-        // 优先用上次成功加载的图标 URL
-        val resolvedUrl = resolvedIconCache.get(domain)
-        if (resolvedUrl != null) {
-            val googleFallback = Glide.with(imageView.context)
-                .load(getGoogleFaviconUrl(domain))
-                .circleCrop()
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .error(android.R.drawable.ic_menu_compass)
-
-            val ddgFallback = Glide.with(imageView.context)
-                .load(getDuckDuckGoUrl(domain))
-                .circleCrop()
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .error(googleFallback)
-
-            Glide.with(imageView.context)
-                .load(resolvedUrl)
-                .circleCrop()
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .placeholder(android.R.drawable.ic_menu_compass)
-                .error(ddgFallback)
-                .into(imageView)
-            return
-        }
-
-        // 没有缓存，走完整降级链
-        imageView.setImageResource(android.R.drawable.ic_menu_compass)
-
         CoroutineScope(Dispatchers.Main).launch {
-            val linkIcons = resolveIconsFromHtml(url)
+            val resolvedUrl = resolvedIconCache.get(domain)
+            val linkIcons = if (resolvedUrl != null) listOf(resolvedUrl) else resolveIconsFromHtml(url)
             loadWithFallbackChain(imageView, domain, linkIcons, isSpeedDial = false, baseUrl = getBaseUrl(url))
         }
     }
