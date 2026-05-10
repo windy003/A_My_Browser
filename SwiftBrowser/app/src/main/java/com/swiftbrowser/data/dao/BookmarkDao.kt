@@ -47,6 +47,10 @@ interface BookmarkDao {
     @Query("SELECT MAX(position) FROM bookmarks WHERE parentId IS NULL")
     suspend fun getMaxPositionRoot(): Int?
 
+    /** 获取所有文件夹 */
+    @Query("SELECT * FROM bookmarks WHERE isFolder = 1 ORDER BY parentId IS NOT NULL, title ASC")
+    suspend fun getAllFolders(): List<Bookmark>
+
     // ==================== 搜索 ====================
 
     /** 在指定文件夹及其所有子文件夹中搜索书签（递归） */

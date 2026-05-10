@@ -1308,10 +1308,95 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, R.string.bookmark_exists, Toast.LENGTH_SHORT).show()
                 return@launch
             }
-            val maxPos = bookmarkDao.getMaxPositionRoot() ?: -1
-            bookmarkDao.insert(Bookmark(title = title, url = url, parentId = null, position = maxPos + 1))
-            Toast.makeText(this@MainActivity, R.string.bookmark_added, Toast.LENGTH_SHORT).show()
+
+            // 获取所有文件夹，构建带路径的列表
+            val allFolders = bookmarkDao.getAllFolders()
+            val folderMap = allFolders.associateBy { it.id }
+
+            // 构建文件夹完整路径
+            fun buildPath(folder: Bookmark): String {
+                val parts = mutableListOf(folder.title)
+                var pid = folder.parentId
+                while (pid != null) {
+                    val parent = folderMap[pid] ?: break
+                    parts.add(0, parent.title)
+                    pid = parent.parentId
+                }
+                return parts.joinToString(" / ")
+            }
+
+            val folderNames = mutableListOf("根目录")
+            val folderIds = mutableListOf<Long?>(null)
+            for (f in allFolders) {
+                folderNames.add(buildPath(f))
+                folderIds.add(f.id)
+            }
+
+            runOnUiThread {
+                showAddBookmarkDialog(title, url, folderNames, folderIds)
+            }
         }
+    }
+
+    private fun showAddBookmarkDialog(
+        defaultTitle: String,
+        url: String,
+        folderNames: List<String>,
+        folderIds: List<Long?>
+    ) {
+        val layout = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(48, 32, 48, 0)
+        }
+
+        val etTitle = EditText(this).apply {
+            setText(defaultTitle)
+            hint = "书签标题"
+            selectAll()
+        }
+        layout.addView(etTitle)
+
+        // 文件夹选择
+        val tvFolderLabel = android.widget.TextView(this).apply {
+            text = "保存到："
+            setPadding(0, 24, 0, 8)
+        }
+        layout.addView(tvFolderLabel)
+
+        var selectedIndex = 0
+        val btnFolder = android.widget.Button(this).apply {
+            text = folderNames[0]
+            isAllCaps = false
+            setOnClickListener {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("选择文件夹")
+                    .setItems(folderNames.toTypedArray()) { _, which ->
+                        selectedIndex = which
+                        text = folderNames[which]
+                    }
+                    .show()
+            }
+        }
+        layout.addView(btnFolder)
+
+        AlertDialog.Builder(this)
+            .setTitle("添加书签")
+            .setView(layout)
+            .setPositiveButton("确认") { _, _ ->
+                val finalTitle = etTitle.text.toString().trim().ifEmpty { defaultTitle }
+                val parentId = folderIds[selectedIndex]
+                lifecycleScope.launch {
+                    val maxPos = if (parentId != null) {
+                        bookmarkDao.getMaxPosition(parentId) ?: -1
+                    } else {
+                        bookmarkDao.getMaxPositionRoot() ?: -1
+                    }
+                    bookmarkDao.insert(Bookmark(title = finalTitle, url = url, parentId = parentId, position = maxPos + 1))
+                    Toast.makeText(this@MainActivity, R.string.bookmark_added, Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun addCurrentPageToSpeedDial() {
