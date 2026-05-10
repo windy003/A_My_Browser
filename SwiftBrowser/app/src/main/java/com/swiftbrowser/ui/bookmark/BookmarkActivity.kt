@@ -631,19 +631,19 @@ class BookmarkActivity : AppCompatActivity() {
                 val cloudBookmarks = withContext(Dispatchers.IO) { cloudSync.fetchCloudBookmarks() }
                 val localBookmarks = bookmarkDao.getAllList()
 
-                // 用 URL 作为非文件夹书签的唯一标识进行比较
-                val localUrls = localBookmarks.filter { !it.isFolder && it.url != null }
-                    .map { it.url!! }.toSet()
-                val cloudUrls = cloudBookmarks.filter { !it.isFolder && it.url != null }
-                    .map { it.url!! }.toSet()
+                // 用 URL + 标题 作为唯一标识进行比较（同URL不同标题视为不同书签）
+                val localKeys = localBookmarks.filter { !it.isFolder && it.url != null }
+                    .map { "${it.url}\n${it.title}" }.toSet()
+                val cloudKeys = cloudBookmarks.filter { !it.isFolder && it.url != null }
+                    .map { "${it.url}\n${it.title}" }.toSet()
 
                 // 本地有、云端没有的
                 val onlyLocal = localBookmarks.filter {
-                    !it.isFolder && it.url != null && it.url !in cloudUrls
+                    !it.isFolder && it.url != null && "${it.url}\n${it.title}" !in cloudKeys
                 }
                 // 云端有、本地没有的
                 val onlyCloud = cloudBookmarks.filter {
-                    !it.isFolder && it.url != null && it.url !in localUrls
+                    !it.isFolder && it.url != null && "${it.url}\n${it.title}" !in localKeys
                 }
 
                 showCompareResultDialog(onlyLocal, onlyCloud, localBookmarks, cloudBookmarks)

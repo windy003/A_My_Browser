@@ -1304,16 +1304,11 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             val existing = bookmarkDao.getByUrl(url)
-            if (existing != null) {
-                Toast.makeText(this@MainActivity, R.string.bookmark_exists, Toast.LENGTH_SHORT).show()
-                return@launch
-            }
 
             // 获取所有文件夹，构建带路径的列表
             val allFolders = bookmarkDao.getAllFolders()
             val folderMap = allFolders.associateBy { it.id }
 
-            // 构建文件夹完整路径
             fun buildPath(folder: Bookmark): String {
                 val parts = mutableListOf(folder.title)
                 var pid = folder.parentId
@@ -1332,8 +1327,15 @@ class MainActivity : AppCompatActivity() {
                 folderIds.add(f.id)
             }
 
+            // 已存在时用已有的标题和文件夹，否则用当前页面标题和根目录
+            val editTitle = existing?.title ?: title
+            val defaultFolderIndex = if (existing != null) {
+                val idx = folderIds.indexOf(existing.parentId)
+                if (idx >= 0) idx else 0
+            } else 0
+
             runOnUiThread {
-                showAddBookmarkDialog(title, url, folderNames, folderIds)
+                showAddBookmarkDialog(editTitle, url, folderNames, folderIds, defaultFolderIndex, existing)
             }
         }
     }
@@ -1342,8 +1344,12 @@ class MainActivity : AppCompatActivity() {
         defaultTitle: String,
         url: String,
         folderNames: List<String>,
-        folderIds: List<Long?>
+        folderIds: List<Long?>,
+        defaultFolderIndex: Int = 0,
+        existingBookmark: Bookmark? = null
     ) {
+        val isEdit = existingBookmark != null
+
         val layout = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             setPadding(48, 32, 48, 0)
@@ -1356,16 +1362,15 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(etTitle)
 
-        // 文件夹选择
         val tvFolderLabel = android.widget.TextView(this).apply {
             text = "保存到："
             setPadding(0, 24, 0, 8)
         }
         layout.addView(tvFolderLabel)
 
-        var selectedIndex = 0
+        var selectedIndex = defaultFolderIndex
         val btnFolder = android.widget.Button(this).apply {
-            text = folderNames[0]
+            text = folderNames[selectedIndex]
             isAllCaps = false
             setOnClickListener {
                 AlertDialog.Builder(this@MainActivity)
@@ -1380,19 +1385,27 @@ class MainActivity : AppCompatActivity() {
         layout.addView(btnFolder)
 
         AlertDialog.Builder(this)
-            .setTitle("添加书签")
+            .setTitle(if (isEdit) "编辑书签" else "添加书签")
             .setView(layout)
             .setPositiveButton("确认") { _, _ ->
                 val finalTitle = etTitle.text.toString().trim().ifEmpty { defaultTitle }
                 val parentId = folderIds[selectedIndex]
                 lifecycleScope.launch {
-                    val maxPos = if (parentId != null) {
-                        bookmarkDao.getMaxPosition(parentId) ?: -1
+                    if (existingBookmark != null) {
+                        // 更新已有书签
+                        val updated = existingBookmark.copy(title = finalTitle, parentId = parentId)
+                        bookmarkDao.update(updated)
+                        Toast.makeText(this@MainActivity, "书签已更新", Toast.LENGTH_SHORT).show()
                     } else {
-                        bookmarkDao.getMaxPositionRoot() ?: -1
+                        // 新增书签
+                        val maxPos = if (parentId != null) {
+                            bookmarkDao.getMaxPosition(parentId) ?: -1
+                        } else {
+                            bookmarkDao.getMaxPositionRoot() ?: -1
+                        }
+                        bookmarkDao.insert(Bookmark(title = finalTitle, url = url, parentId = parentId, position = maxPos + 1))
+                        Toast.makeText(this@MainActivity, R.string.bookmark_added, Toast.LENGTH_SHORT).show()
                     }
-                    bookmarkDao.insert(Bookmark(title = finalTitle, url = url, parentId = parentId, position = maxPos + 1))
-                    Toast.makeText(this@MainActivity, R.string.bookmark_added, Toast.LENGTH_SHORT).show()
                 }
             }
             .setNegativeButton("取消", null)
