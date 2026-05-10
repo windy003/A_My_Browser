@@ -391,22 +391,6 @@ object FaviconProvider {
     fun loadBookmarkFavicon(imageView: ImageView, url: String, customFavicon: String? = null) {
         val domain = extractDomain(url)
 
-        if (customFavicon != null) {
-            Glide.with(imageView.context)
-                .load(customFavicon)
-                .circleCrop()
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .placeholder(android.R.drawable.ic_menu_compass)
-                .error(
-                    Glide.with(imageView.context)
-                        .load(domain?.let { getBrandfetchUrl(it, 128) })
-                        .circleCrop()
-                        .error(android.R.drawable.ic_menu_compass)
-                )
-                .into(imageView)
-            return
-        }
-
         if (domain == null) {
             imageView.setImageResource(android.R.drawable.ic_menu_compass)
             return
