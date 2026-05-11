@@ -693,6 +693,14 @@ class BookmarkActivity : AppCompatActivity() {
         return parts.joinToString(" - ")
     }
 
+    /** 比较面板中的分组显示项（文件夹标题 或 书签条目） */
+    private data class CompareDisplayItem(
+        val text: String,
+        val isHeader: Boolean, // 是否为文件夹分组标题
+        val folderName: String, // 所属文件夹名（用于按文件夹删除）
+        val compareItem: CompareItem? = null // 非标题行才有
+    )
+
     private fun showCompareResultDialog(
         onlyLocal: List<Bookmark>,
         onlyCloud: List<CloudSyncManager.CloudBookmark>,
@@ -705,91 +713,303 @@ class BookmarkActivity : AppCompatActivity() {
         }
 
         lifecycleScope.launch {
-            val items = mutableListOf<CompareItem>()
+            // 构建本地独有的 CompareItem
+            val localItems = mutableListOf<CompareItem>()
             for (b in onlyLocal) {
                 val path = buildLocalPath(b, allLocalBookmarks)
-                items.add(CompareItem(
-                    title = b.title,
-                    path = path,
-                    url = b.url!!,
-                    isLocal = true,
-                    localBookmark = b
+                localItems.add(CompareItem(
+                    title = b.title, path = path, url = b.url!!,
+                    isLocal = true, localBookmark = b
                 ))
             }
+            // 构建云端独有的 CompareItem
+            val cloudItems = mutableListOf<CompareItem>()
             for (b in onlyCloud) {
                 val path = buildCloudPath(b, allCloudBookmarks)
-                items.add(CompareItem(
-                    title = b.title,
-                    path = path,
-                    url = b.url!!,
-                    isLocal = false,
-                    cloudBookmark = b
+                cloudItems.add(CompareItem(
+                    title = b.title, path = path, url = b.url!!,
+                    isLocal = false, cloudBookmark = b
                 ))
             }
 
-            items.sortBy { it.path }
-
-            val displayItems = items.map { item ->
-                val prefix = if (item.isLocal) "【本地】" else "【云端】"
-                "$prefix ${item.path}"
+            // 按文件夹分组的辅助函数：从 path 中提取文件夹部分
+            fun extractFolder(path: String): String {
+                val lastSep = path.lastIndexOf(" - ")
+                return if (lastSep > 0) path.substring(0, lastSep) else "根目录"
             }
+
+            // 构建带分组标题的显示列表
+            fun buildDisplayList(items: List<CompareItem>): List<CompareDisplayItem> {
+                val sorted = items.sortedBy { it.path }
+                val result = mutableListOf<CompareDisplayItem>()
+                var lastFolder = ""
+                for (item in sorted) {
+                    val folder = extractFolder(item.path)
+                    if (folder != lastFolder) {
+                        result.add(CompareDisplayItem(
+                            text = "📁 $folder",
+                            isHeader = true,
+                            folderName = folder
+                        ))
+                        lastFolder = folder
+                    }
+                    result.add(CompareDisplayItem(
+                        text = "    ${item.title}",
+                        isHeader = false,
+                        folderName = folder,
+                        compareItem = item
+                    ))
+                }
+                return result
+            }
+
+            val localDisplayItems = buildDisplayList(localItems).toMutableList()
+            val cloudDisplayItems = buildDisplayList(cloudItems).toMutableList()
+
+            // 用于追踪被用户删除的条目（从同步列表中排除）
+            val removedLocalBookmarks = mutableSetOf<Long>() // 本地书签id
+            val removedCloudBookmarkIds = mutableSetOf<Int>() // 云端书签id
 
             runOnUiThread {
                 var compareDialog: AlertDialog? = null
 
-                val listView = ListView(this@BookmarkActivity).apply {
-                    adapter = ArrayAdapter(
-                        this@BookmarkActivity,
-                        android.R.layout.simple_list_item_1,
-                        displayItems
-                    )
-                    setOnItemLongClickListener { _, _, position, _ ->
-                        showCompareItemOptions(items[position], compareDialog)
-                        true
+                val ctx = this@BookmarkActivity
+
+                // 手动展开 ListView 高度使其在 ScrollView 中完整显示
+                fun expandListView(listView: ListView) {
+                    val listAdapter = listView.adapter ?: return
+                    var totalHeight = 0
+                    for (i in 0 until listAdapter.count) {
+                        val item = listAdapter.getView(i, null, listView)
+                        item.measure(
+                            View.MeasureSpec.makeMeasureSpec(listView.width, View.MeasureSpec.UNSPECIFIED),
+                            View.MeasureSpec.UNSPECIFIED
+                        )
+                        totalHeight += item.measuredHeight
+                    }
+                    listView.layoutParams = listView.layoutParams?.apply {
+                        height = totalHeight + listView.dividerHeight * (listAdapter.count - 1).coerceAtLeast(0)
                     }
                 }
 
-                val titleText = "本地独有: ${onlyLocal.size} 项 | 云端独有: ${onlyCloud.size} 项"
+                // ===== 本地独有面板 =====
+                val localLabel = android.widget.TextView(ctx).apply {
+                    text = "本地独有（${localItems.size} 项）"
+                    setPadding(24, 16, 24, 8)
+                    setTypeface(null, android.graphics.Typeface.BOLD)
+                    textSize = 15f
+                }
+                val localAdapter = ArrayAdapter(ctx, android.R.layout.simple_list_item_1,
+                    localDisplayItems.map { it.text }.toMutableList())
+                val localListView = ListView(ctx).apply {
+                    adapter = localAdapter
+                }
+                localListView.setOnItemLongClickListener { _, _, position, _ ->
+                    val displayItem = localDisplayItems[position]
+                    if (displayItem.isHeader) {
+                        val folderName = displayItem.folderName
+                        val folderItems = localDisplayItems.filter {
+                            !it.isHeader && it.folderName == folderName
+                        }
+                        val count = folderItems.size
+                        AlertDialog.Builder(ctx, R.style.DialogTheme)
+                            .setTitle("删除本地书签")
+                            .setMessage("确定从本地删除「$folderName」下的 $count 条书签？")
+                            .setPositiveButton("删除") { _, _ ->
+                                lifecycleScope.launch {
+                                    for (fi in folderItems) {
+                                        fi.compareItem?.localBookmark?.let { bm ->
+                                            bookmarkDao.deleteById(bm.id)
+                                            removedLocalBookmarks.add(bm.id)
+                                        }
+                                    }
+                                    localDisplayItems.removeAll { it.folderName == folderName }
+                                    localAdapter.clear()
+                                    localAdapter.addAll(localDisplayItems.map { it.text })
+                                    localAdapter.notifyDataSetChanged()
+                                    localListView.post { expandListView(localListView) }
+                                    localLabel.text = "本地独有（${localDisplayItems.count { !it.isHeader }} 项）"
+                                    Toast.makeText(ctx, "已删除 $count 条本地书签", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                            .setNegativeButton("取消", null)
+                            .show()
+                    } else {
+                        val item = displayItem.compareItem ?: return@setOnItemLongClickListener true
+                        AlertDialog.Builder(ctx, R.style.DialogTheme)
+                            .setTitle("删除本地书签")
+                            .setMessage("确定从本地删除「${item.title}」？")
+                            .setPositiveButton("删除") { _, _ ->
+                                lifecycleScope.launch {
+                                    item.localBookmark?.let { bm ->
+                                        bookmarkDao.deleteById(bm.id)
+                                        removedLocalBookmarks.add(bm.id)
+                                    }
+                                    localDisplayItems.removeAt(position)
+                                    val folder = displayItem.folderName
+                                    if (localDisplayItems.none { !it.isHeader && it.folderName == folder }) {
+                                        localDisplayItems.removeAll { it.isHeader && it.folderName == folder }
+                                    }
+                                    localAdapter.clear()
+                                    localAdapter.addAll(localDisplayItems.map { it.text })
+                                    localAdapter.notifyDataSetChanged()
+                                    localListView.post { expandListView(localListView) }
+                                    localLabel.text = "本地独有（${localDisplayItems.count { !it.isHeader }} 项）"
+                                    Toast.makeText(ctx, "已删除", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                            .setNegativeButton("取消", null)
+                            .show()
+                    }
+                    true
+                }
 
-                val btnRefresh = android.widget.Button(this@BookmarkActivity).apply {
+                // ===== 云端独有面板 =====
+                val cloudLabel = android.widget.TextView(ctx).apply {
+                    text = "云端独有（${cloudItems.size} 项）"
+                    setPadding(24, 16, 24, 8)
+                    setTypeface(null, android.graphics.Typeface.BOLD)
+                    textSize = 15f
+                }
+                val cloudAdapter = ArrayAdapter(ctx, android.R.layout.simple_list_item_1,
+                    cloudDisplayItems.map { it.text }.toMutableList())
+                val cloudListView = ListView(ctx).apply {
+                    adapter = cloudAdapter
+                }
+                cloudListView.setOnItemLongClickListener { _, _, position, _ ->
+                    val displayItem = cloudDisplayItems[position]
+                    if (displayItem.isHeader) {
+                        val folderName = displayItem.folderName
+                        val folderItems = cloudDisplayItems.filter {
+                            !it.isHeader && it.folderName == folderName
+                        }
+                        val count = folderItems.size
+                        AlertDialog.Builder(ctx, R.style.DialogTheme)
+                            .setTitle("删除云端书签")
+                            .setMessage("确定从云端删除「$folderName」下的 $count 条书签？")
+                            .setPositiveButton("删除") { _, _ ->
+                                lifecycleScope.launch {
+                                    try {
+                                        withContext(Dispatchers.IO) {
+                                            for (fi in folderItems) {
+                                                fi.compareItem?.cloudBookmark?.let { cb ->
+                                                    app.cloudSyncManager.deleteCloudBookmark(cb.id)
+                                                    removedCloudBookmarkIds.add(cb.id)
+                                                }
+                                            }
+                                        }
+                                        cloudDisplayItems.removeAll { it.folderName == folderName }
+                                        cloudAdapter.clear()
+                                        cloudAdapter.addAll(cloudDisplayItems.map { it.text })
+                                        cloudAdapter.notifyDataSetChanged()
+                                        cloudListView.post { expandListView(cloudListView) }
+                                        cloudLabel.text = "云端独有（${cloudDisplayItems.count { !it.isHeader }} 项）"
+                                        Toast.makeText(ctx, "已删除 $count 条云端书签", Toast.LENGTH_SHORT).show()
+                                    } catch (e: Exception) {
+                                        Toast.makeText(ctx, "删除失败: ${e.message}", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            }
+                            .setNegativeButton("取消", null)
+                            .show()
+                    } else {
+                        val item = displayItem.compareItem ?: return@setOnItemLongClickListener true
+                        AlertDialog.Builder(ctx, R.style.DialogTheme)
+                            .setTitle("删除云端书签")
+                            .setMessage("确定从云端删除「${item.title}」？")
+                            .setPositiveButton("删除") { _, _ ->
+                                lifecycleScope.launch {
+                                    try {
+                                        withContext(Dispatchers.IO) {
+                                            item.cloudBookmark?.let { cb ->
+                                                app.cloudSyncManager.deleteCloudBookmark(cb.id)
+                                                removedCloudBookmarkIds.add(cb.id)
+                                            }
+                                        }
+                                        cloudDisplayItems.removeAt(position)
+                                        val folder = displayItem.folderName
+                                        if (cloudDisplayItems.none { !it.isHeader && it.folderName == folder }) {
+                                            cloudDisplayItems.removeAll { it.isHeader && it.folderName == folder }
+                                        }
+                                        cloudAdapter.clear()
+                                        cloudAdapter.addAll(cloudDisplayItems.map { it.text })
+                                        cloudAdapter.notifyDataSetChanged()
+                                        cloudListView.post { expandListView(cloudListView) }
+                                        cloudLabel.text = "云端独有（${cloudDisplayItems.count { !it.isHeader }} 项）"
+                                        Toast.makeText(ctx, "已删除", Toast.LENGTH_SHORT).show()
+                                    } catch (e: Exception) {
+                                        Toast.makeText(ctx, "删除失败: ${e.message}", Toast.LENGTH_LONG).show()
+                                    }
+                                    }
+                                }
+                                .setNegativeButton("取消", null)
+                                .show()
+                    }
+                    true
+                }
+
+                // ===== 按钮栏 =====
+                val btnBidirectional = android.widget.Button(ctx).apply {
+                    text = "增量双向同步"
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { setMargins(16, 8, 16, 0) }
+                }
+
+                val btnRefresh = android.widget.Button(ctx).apply {
                     text = "刷新比较"
                     layoutParams = android.widget.LinearLayout.LayoutParams(
                         android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                         android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                    ).apply {
-                        setMargins(16, 0, 16, 8)
+                    ).apply { setMargins(16, 0, 16, 8) }
+                }
+
+                val hint = android.widget.TextView(ctx).apply {
+                    text = "长按书签或文件夹可删除，确认无误后点击同步"
+                    setPadding(24, 8, 24, 4)
+                    textSize = 12f
+                    setTextColor(0xFF888888.toInt())
+                }
+
+                // ===== 组装布局 =====
+                val scrollContent = android.widget.LinearLayout(ctx).apply {
+                    orientation = android.widget.LinearLayout.VERTICAL
+
+                    addView(localLabel)
+                    addView(localListView, android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ))
+
+                    addView(cloudLabel)
+                    addView(cloudListView, android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ))
+                }
+
+                val scrollView = android.widget.ScrollView(ctx).apply {
+                    addView(scrollContent)
+                    // 展开 ListView 需要在布局完成后执行
+                    post {
+                        expandListView(localListView)
+                        expandListView(cloudListView)
                     }
                 }
 
-                val dialogView = android.widget.LinearLayout(this@BookmarkActivity).apply {
+                val dialogView = android.widget.LinearLayout(ctx).apply {
                     orientation = android.widget.LinearLayout.VERTICAL
-                    addView(listView, android.widget.LinearLayout.LayoutParams(
+                    addView(hint)
+                    addView(scrollView, android.widget.LinearLayout.LayoutParams(
                         android.widget.LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
                     ))
-
-                    val btnBar = android.widget.LinearLayout(this@BookmarkActivity).apply {
-                        orientation = android.widget.LinearLayout.HORIZONTAL
-                        setPadding(16, 8, 16, 8)
-
-                        val btnBidirectional = android.widget.Button(this@BookmarkActivity).apply {
-                            text = "增量双向同步"
-                            layoutParams = android.widget.LinearLayout.LayoutParams(
-                                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                            )
-                        }
-
-                        btnBidirectional.setOnClickListener {
-                            performBidirectionalSync(onlyLocal, onlyCloud, compareDialog)
-                        }
-
-                        addView(btnBidirectional)
-                    }
-                    addView(btnBar)
+                    addView(btnBidirectional)
                     addView(btnRefresh)
                 }
 
-                val dialog = AlertDialog.Builder(this@BookmarkActivity, R.style.DialogTheme)
+                val titleText = "本地独有: ${onlyLocal.size} 项 | 云端独有: ${onlyCloud.size} 项"
+                val dialog = AlertDialog.Builder(ctx, R.style.DialogTheme)
                     .setTitle(titleText)
                     .setView(dialogView)
                     .setNegativeButton("关闭", null)
@@ -797,85 +1017,17 @@ class BookmarkActivity : AppCompatActivity() {
 
                 compareDialog = dialog
 
+                btnBidirectional.setOnClickListener {
+                    // 过滤掉已被用户删除的条目
+                    val finalLocal = onlyLocal.filter { it.id !in removedLocalBookmarks }
+                    val finalCloud = onlyCloud.filter { it.id !in removedCloudBookmarkIds }
+                    performBidirectionalSync(finalLocal, finalCloud, compareDialog)
+                }
+
                 btnRefresh.setOnClickListener {
                     dialog.dismiss()
                     compareWithCloud()
                 }
-            }
-        }
-    }
-
-    private fun performIncrementalUpload(
-        onlyLocal: List<Bookmark>,
-        parentDialog: AlertDialog? = null
-    ) {
-        val cloudSync = app.cloudSyncManager
-        if (!cloudSync.isLoggedIn) {
-            Toast.makeText(this, "请先登录云端账号", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (onlyLocal.isEmpty()) {
-            Toast.makeText(this, "没有需要上传的书签", Toast.LENGTH_SHORT).show()
-            return
-        }
-        Toast.makeText(this, "正在增量上传 ${onlyLocal.size} 条...", Toast.LENGTH_SHORT).show()
-        lifecycleScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    for (bookmark in onlyLocal) {
-                        cloudSync.uploadSingleBookmark(bookmark)
-                    }
-                }
-                Toast.makeText(this@BookmarkActivity, "增量上传成功（${onlyLocal.size} 条）", Toast.LENGTH_SHORT).show()
-                parentDialog?.dismiss()
-                compareWithCloud()
-            } catch (e: Exception) {
-                Toast.makeText(this@BookmarkActivity, "上传失败: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun performIncrementalDownload(
-        onlyCloud: List<CloudSyncManager.CloudBookmark>,
-        parentDialog: AlertDialog? = null
-    ) {
-        val cloudSync = app.cloudSyncManager
-        if (!cloudSync.isLoggedIn) {
-            Toast.makeText(this, "请先登录云端账号", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (onlyCloud.isEmpty()) {
-            Toast.makeText(this, "没有需要下载的书签", Toast.LENGTH_SHORT).show()
-            return
-        }
-        Toast.makeText(this, "正在增量下载 ${onlyCloud.size} 条...", Toast.LENGTH_SHORT).show()
-        lifecycleScope.launch {
-            try {
-                val parentId = currentFolder?.id
-                var maxPos = if (parentId != null) {
-                    bookmarkDao.getMaxPosition(parentId) ?: -1
-                } else {
-                    bookmarkDao.getMaxPositionRoot() ?: -1
-                }
-                for (cloud in onlyCloud) {
-                    maxPos++
-                    bookmarkDao.insert(
-                        Bookmark(
-                            title = cloud.title,
-                            url = cloud.url,
-                            isFolder = false,
-                            parentId = parentId,
-                            position = maxPos,
-                            favicon = cloud.favicon
-                        )
-                    )
-                }
-                Toast.makeText(this@BookmarkActivity, "增量下载成功（${onlyCloud.size} 条）", Toast.LENGTH_SHORT).show()
-                loadCurrentFolder()
-                parentDialog?.dismiss()
-                compareWithCloud()
-            } catch (e: Exception) {
-                Toast.makeText(this@BookmarkActivity, "下载失败: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -933,84 +1085,6 @@ class BookmarkActivity : AppCompatActivity() {
         }
     }
 
-    private fun showCompareItemOptions(item: CompareItem, parentDialog: AlertDialog? = null) {
-        val options = if (item.isLocal) {
-            arrayOf("上传到云端", "从本地删除")
-        } else {
-            arrayOf("下载到本地", "从云端删除")
-        }
-
-        AlertDialog.Builder(this, R.style.DialogTheme)
-            .setTitle(item.title)
-            .setItems(options) { _, which ->
-                when (options[which]) {
-                    "上传到云端" -> {
-                        item.localBookmark?.let { bookmark ->
-                            lifecycleScope.launch {
-                                try {
-                                    withContext(Dispatchers.IO) {
-                                        app.cloudSyncManager.uploadSingleBookmark(bookmark)
-                                    }
-                                    Toast.makeText(this@BookmarkActivity, "已上传到云端", Toast.LENGTH_SHORT).show()
-                                } catch (e: Exception) {
-                                    Toast.makeText(this@BookmarkActivity, "上传失败: ${e.message}", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
-                    }
-                    "从本地删除" -> {
-                        item.localBookmark?.let { bookmark ->
-                            lifecycleScope.launch {
-                                bookmarkDao.deleteById(bookmark.id)
-                                Toast.makeText(this@BookmarkActivity, "已从本地删除", Toast.LENGTH_SHORT).show()
-                                parentDialog?.dismiss()
-                                compareWithCloud()
-                            }
-                        }
-                    }
-                    "下载到本地" -> {
-                        item.cloudBookmark?.let { cloud ->
-                            lifecycleScope.launch {
-                                val parentId = currentFolder?.id
-                                val maxPos = if (parentId != null) {
-                                    bookmarkDao.getMaxPosition(parentId) ?: -1
-                                } else {
-                                    bookmarkDao.getMaxPositionRoot() ?: -1
-                                }
-                                bookmarkDao.insert(
-                                    Bookmark(
-                                        title = cloud.title,
-                                        url = cloud.url,
-                                        isFolder = false,
-                                        parentId = parentId,
-                                        position = maxPos + 1,
-                                        favicon = cloud.favicon
-                                    )
-                                )
-                                Toast.makeText(this@BookmarkActivity, "已下载到本地", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    }
-                    "从云端删除" -> {
-                        item.cloudBookmark?.let { cloud ->
-                            lifecycleScope.launch {
-                                try {
-                                    withContext(Dispatchers.IO) {
-                                        app.cloudSyncManager.deleteCloudBookmark(cloud.id)
-                                    }
-                                    Toast.makeText(this@BookmarkActivity, "已从云端删除", Toast.LENGTH_SHORT).show()
-                                    parentDialog?.dismiss()
-                                    compareWithCloud()
-                                } catch (e: Exception) {
-                                    Toast.makeText(this@BookmarkActivity, "删除失败: ${e.message}", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .show()
-    }
 
     // ==================== 导入 Chrome 书签 ====================
 
