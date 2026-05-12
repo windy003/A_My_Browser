@@ -33,11 +33,11 @@ object FaviconProvider {
 
     /**
      * 缓存已解析的网站 link 标签图标地址，避免重复请求
-     * key = domain, value = 按分辨率从高到低排列的图标 URL 列表
+     * key = pageKey（域名+路径目录）, value = 按分辨率从高到低排列的图标 URL 列表
      */
     private val linkIconCache = LruCache<String, List<String>>(200)
 
-    /** 缓存每个域名最终成功加载的图标 URL，重启后直接用，无需重跑降级链 */
+    /** 缓存每个页面最终成功加载的图标 URL，重启后直接用，无需重跑降级链 */
     private val resolvedIconCache = LruCache<String, String>(200)
 
     private const val PREFS_NAME = "favicon_link_cache"
@@ -108,6 +108,39 @@ object FaviconProvider {
     }
 
     /**
+     * 提取页面级缓存 key：域名 + 路径目录部分。
+     * 同一域名不同路径的页面（如 GitHub Pages 上的不同项目）
+     * 可能有不同的图标，需要分别缓存。
+     * 例如：
+     *   https://windy003.github.io/web_project/ -> windy003.github.io/web_project
+     *   https://windy003.github.io/web_project/youtube-cc-finder/index.html -> windy003.github.io/web_project/youtube-cc-finder
+     */
+    private fun extractPageKey(url: String): String? {
+        return try {
+            val uri = Uri.parse(url)
+            val host = uri.host ?: return null
+            val domain = host.removePrefix("www.")
+            val port = uri.port
+            val hostPart = if (port != -1 && port != 80 && port != 443 && isIpAddress(domain)) {
+                "${domain}:${port}"
+            } else {
+                domain
+            }
+            val path = uri.path?.trimEnd('/') ?: ""
+            // 去掉最后的文件名部分（如 index.html），保留目录
+            val dirPath = if (path.contains('.') && path.lastIndexOf('/') > 0) {
+                // 可能是文件名（包含扩展名），取其目录
+                path.substring(0, path.lastIndexOf('/'))
+            } else {
+                path
+            }
+            if (dirPath.isEmpty()) hostPart else "$hostPart$dirPath"
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
      * 获取页面所在目录的 URL（去掉文件名部分）
      * 如 https://example.com/repo/page.html -> https://example.com/repo
      */
@@ -170,10 +203,10 @@ object FaviconProvider {
      * 按 rel 类型和分辨率排序（apple-touch-icon 优先，分辨率从高到低）
      */
     suspend fun resolveIconsFromHtml(pageUrl: String): List<String> {
-        val domain = extractDomain(pageUrl) ?: return emptyList()
+        val pageKey = extractPageKey(pageUrl) ?: return emptyList()
 
         // 先查缓存
-        linkIconCache.get(domain)?.let { return it }
+        linkIconCache.get(pageKey)?.let { return it }
 
         return withContext(Dispatchers.IO) {
             try {
@@ -190,8 +223,8 @@ object FaviconProvider {
 
                 val urls = sorted.map { it.href }
                 if (urls.isNotEmpty()) {
-                    linkIconCache.put(domain, urls)
-                    persistToPrefs(domain, urls)
+                    linkIconCache.put(pageKey, urls)
+                    persistToPrefs(pageKey, urls)
                 }
                 urls
             } catch (e: Exception) {
@@ -321,16 +354,17 @@ object FaviconProvider {
      */
     fun loadSpeedDialIcon(imageView: ImageView, url: String, customIconUrl: String? = null) {
         val domain = extractDomain(url)
+        val pageKey = extractPageKey(url)
 
-        if (domain == null) {
+        if (domain == null || pageKey == null) {
             imageView.setImageResource(R.drawable.ic_speed_dial_default)
             return
         }
 
         CoroutineScope(Dispatchers.Main).launch {
-            val resolvedUrl = resolvedIconCache.get(domain)
+            val resolvedUrl = resolvedIconCache.get(pageKey)
             val linkIcons = if (resolvedUrl != null) listOf(resolvedUrl) else resolveIconsFromHtml(url)
-            loadWithFallbackChain(imageView, domain, linkIcons, isSpeedDial = true, baseUrl = getBaseUrl(url))
+            loadWithFallbackChain(imageView, domain, pageKey, linkIcons, isSpeedDial = true, baseUrl = getBaseUrl(url))
         }
     }
 
@@ -339,16 +373,17 @@ object FaviconProvider {
      */
     fun loadBookmarkFavicon(imageView: ImageView, url: String, customFavicon: String? = null) {
         val domain = extractDomain(url)
+        val pageKey = extractPageKey(url)
 
-        if (domain == null) {
+        if (domain == null || pageKey == null) {
             imageView.setImageResource(android.R.drawable.ic_menu_compass)
             return
         }
 
         CoroutineScope(Dispatchers.Main).launch {
-            val resolvedUrl = resolvedIconCache.get(domain)
+            val resolvedUrl = resolvedIconCache.get(pageKey)
             val linkIcons = if (resolvedUrl != null) listOf(resolvedUrl) else resolveIconsFromHtml(url)
-            loadWithFallbackChain(imageView, domain, linkIcons, isSpeedDial = false, baseUrl = getBaseUrl(url))
+            loadWithFallbackChain(imageView, domain, pageKey, linkIcons, isSpeedDial = false, baseUrl = getBaseUrl(url))
         }
     }
 
@@ -360,6 +395,7 @@ object FaviconProvider {
     private fun loadWithFallbackChain(
         imageView: ImageView,
         domain: String,
+        pageKey: String,
         linkIcons: List<String>,
         isSpeedDial: Boolean,
         baseUrl: String? = null
@@ -380,7 +416,7 @@ object FaviconProvider {
             ): Boolean {
                 val url = model as? String
                 if (url != null) {
-                    saveResolvedIcon(domain, url)
+                    saveResolvedIcon(pageKey, url)
                 }
                 return false
             }

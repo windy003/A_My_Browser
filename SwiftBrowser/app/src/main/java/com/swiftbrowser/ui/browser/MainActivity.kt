@@ -405,7 +405,22 @@ class MainActivity : AppCompatActivity() {
                     val url = request?.url?.toString() ?: return false
                     if (!url.startsWith("http://") && !url.startsWith("https://")) {
                         try {
-                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            if (url.startsWith("intent://")) {
+                                // 解析 intent:// 协议（YouTube 等应用使用此方式打开原生 App）
+                                val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
+                                try {
+                                    startActivity(intent)
+                                } catch (_: android.content.ActivityNotFoundException) {
+                                    // App 未安装，尝试跳转到应用商店
+                                    val packageName = intent.`package`
+                                    if (packageName != null) {
+                                        startActivity(Intent(Intent.ACTION_VIEW,
+                                            Uri.parse("market://details?id=$packageName")))
+                                    }
+                                }
+                            } else {
+                                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            }
                         } catch (_: Exception) { }
                         return true
                     }
