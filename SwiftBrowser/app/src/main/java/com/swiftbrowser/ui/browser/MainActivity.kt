@@ -58,6 +58,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var speedDialAdapter: SpeedDialAdapter
     private lateinit var itemTouchHelper: ItemTouchHelper
+    private var folderItemTouchHelper: ItemTouchHelper? = null
 
     private val app get() = application as SwiftBrowserApp
     private val bookmarkDao get() = app.database.bookmarkDao()
@@ -811,7 +812,10 @@ class MainActivity : AppCompatActivity() {
                 for (child in children) {
                     if (child.isFolder) {
                         val grandChildren = bookmarkDao.getChildrenList(child.id)
-                        if (grandChildren.size == 1) {
+                        if (grandChildren.isEmpty()) {
+                            // 文件夹没有内容，自动删除
+                            bookmarkDao.deleteById(child.id)
+                        } else if (grandChildren.size == 1) {
                             // 文件夹只剩一个条目，自动移出到快速拨号根目录并删除空文件夹
                             val only = grandChildren[0]
                             bookmarkDao.moveTo(only.id, sdFolderId)
@@ -866,27 +870,63 @@ class MainActivity : AppCompatActivity() {
 
         folderAdapter = SpeedDialAdapter(
             onClickSite = { bookmark ->
+                if (folderAdapter.moveMode) return@SpeedDialAdapter
                 closeFolderOverlay()
                 loadUrl(bookmark.url ?: "")
             },
             onLongClickSite = { bookmark -> showSpeedDialSiteOptions(bookmark) },
             onStartDrag = { viewHolder ->
-                val position = viewHolder.bindingAdapterPosition
-                if (position == RecyclerView.NO_POSITION) return@SpeedDialAdapter
-                val item = folderAdapter.currentList.getOrNull(position) as? SpeedDialItem.Site ?: return@SpeedDialAdapter
-                val bookmark = item.bookmark
-                val clipData = ClipData.newPlainText("bookmarkId", bookmark.id.toString())
-                val shadow = View.DragShadowBuilder(viewHolder.itemView)
-                binding.rvFolderItems.startDragAndDrop(clipData, shadow, bookmark, 0)
+                if (folderAdapter.moveMode) {
+                    // 移动模式：用 ItemTouchHelper 拖拽排序
+                    folderItemTouchHelper?.startDrag(viewHolder)
+                } else {
+                    // 非移动模式：用 Android 拖放 API 移出文件夹
+                    val position = viewHolder.bindingAdapterPosition
+                    if (position == RecyclerView.NO_POSITION) return@SpeedDialAdapter
+                    val item = folderAdapter.currentList.getOrNull(position) as? SpeedDialItem.Site ?: return@SpeedDialAdapter
+                    val bookmark = item.bookmark
+                    val clipData = ClipData.newPlainText("bookmarkId", bookmark.id.toString())
+                    val shadow = View.DragShadowBuilder(viewHolder.itemView)
+                    binding.rvFolderItems.startDragAndDrop(clipData, shadow, bookmark, 0)
+                }
             },
             onClickFolder = { _, _ -> },
             onLongClickFolder = { }
         )
 
+        // 如果当前处于移动模式，同步给 folderAdapter
+        if (speedDialAdapter.moveMode) {
+            folderAdapter.enterMoveMode()
+        }
+
+        // 为文件夹内容配置 ItemTouchHelper 用于拖拽排序
+        val folderDragCallback = SpeedDialDragHelper(
+            adapter = folderAdapter,
+            onReorder = { reorderedList ->
+                lifecycleScope.launch {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        app.database.runInTransaction {
+                            kotlinx.coroutines.runBlocking {
+                                reorderedList.forEachIndexed { index, item ->
+                                    val id = when (item) {
+                                        is SpeedDialItem.Site -> item.bookmark.id
+                                        is SpeedDialItem.Folder -> item.folder.id
+                                    }
+                                    bookmarkDao.updatePosition(id, index)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        )
+        folderItemTouchHelper = ItemTouchHelper(folderDragCallback)
+
         binding.rvFolderItems.apply {
             layoutManager = GridLayoutManager(this@MainActivity, 4)
             adapter = folderAdapter
         }
+        folderItemTouchHelper!!.attachToRecyclerView(binding.rvFolderItems)
 
         folderAdapter.submitList(children.map { SpeedDialItem.Site(it) })
 
@@ -1169,6 +1209,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun enterMoveMode() {
         speedDialAdapter.enterMoveMode()
+        if (::folderAdapter.isInitialized) folderAdapter.enterMoveMode()
         binding.tvMoveMode.text = "移动模式 — 长按图标拖拽排序，点击空白区域退出"
         binding.tvMoveMode.visibility = View.VISIBLE
         Toast.makeText(this, "已进入移动模式，长按图标拖拽排序", Toast.LENGTH_SHORT).show()
@@ -1176,6 +1217,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun exitMoveMode() {
         speedDialAdapter.exitMoveMode()
+        if (::folderAdapter.isInitialized) folderAdapter.exitMoveMode()
         binding.tvMoveMode.visibility = View.GONE
     }
 

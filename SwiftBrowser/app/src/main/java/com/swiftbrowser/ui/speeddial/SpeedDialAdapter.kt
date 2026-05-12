@@ -80,7 +80,11 @@ class SpeedDialAdapter(
      */
     fun finishDragReorder(): List<SpeedDialItem> {
         val result = dragOrderList?.toList() ?: currentList.toList()
-        dragOrderList = null
+        // 立即提交新顺序，但保留 dragOrderList 直到 DiffUtil 完成
+        // 这样在异步 diff 期间 getItem() 仍返回正确顺序，不会弹回
+        submitList(result) {
+            dragOrderList = null
+        }
         return result
     }
 
@@ -246,9 +250,23 @@ class SpeedDialAdapter(
                 }
             }
 
-            binding.root.setOnClickListener { onClickFolder(folder, children) }
+            binding.root.setOnClickListener {
+                if (moveMode || folderMode) return@setOnClickListener
+                onClickFolder(folder, children)
+            }
             binding.root.setOnLongClickListener {
-                onLongClickFolder(folder)
+                vibratePhone(binding.root.context)
+                if (moveMode || folderMode) {
+                    binding.root.animate()
+                        .scaleX(1.1f)
+                        .scaleY(1.1f)
+                        .translationZ(12f)
+                        .setDuration(150)
+                        .start()
+                    onStartDrag?.invoke(this)
+                } else {
+                    onLongClickFolder(folder)
+                }
                 true
             }
         }
