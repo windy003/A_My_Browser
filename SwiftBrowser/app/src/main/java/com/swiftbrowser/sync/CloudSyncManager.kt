@@ -98,12 +98,12 @@ class CloudSyncManager(
 
     // ==================== 上传单条书签到云端 ====================
 
-    suspend fun uploadSingleBookmark(bookmark: Bookmark) = withContext(Dispatchers.IO) {
+    suspend fun uploadSingleBookmark(bookmark: Bookmark, cloudParentId: Int? = null) = withContext(Dispatchers.IO) {
         val body = JSONObject().apply {
             put("title", bookmark.title)
             put("url", bookmark.url ?: JSONObject.NULL)
             put("isFolder", bookmark.isFolder)
-            put("parentId", JSONObject.NULL)
+            put("parentId", cloudParentId ?: JSONObject.NULL)
             put("position", bookmark.position)
             put("favicon", bookmark.favicon ?: JSONObject.NULL)
             put("createdAt", bookmark.createdAt)
@@ -113,6 +113,27 @@ class CloudSyncManager(
             val error = try { JSONObject(response.body).optString("error", "上传失败") } catch (e: Exception) { "上传失败" }
             throw Exception(error)
         }
+    }
+
+    // ==================== 在云端创建文件夹，返回云端ID ====================
+
+    suspend fun createCloudFolder(title: String, parentId: Int? = null): Int = withContext(Dispatchers.IO) {
+        val body = JSONObject().apply {
+            put("title", title)
+            put("url", JSONObject.NULL)
+            put("isFolder", true)
+            put("parentId", parentId ?: JSONObject.NULL)
+            put("position", 0)
+            put("favicon", JSONObject.NULL)
+            put("createdAt", System.currentTimeMillis())
+        }
+        val response = post("/api/bookmarks/add", body.toString(), auth = true)
+        if (response.code != 200) {
+            val error = try { JSONObject(response.body).optString("error", "创建文件夹失败") } catch (e: Exception) { "创建文件夹失败" }
+            throw Exception(error)
+        }
+        val json = JSONObject(response.body)
+        json.getInt("id")
     }
 
     // ==================== 删除单条云端书签 ====================

@@ -631,19 +631,44 @@ class BookmarkActivity : AppCompatActivity() {
                 val cloudBookmarks = withContext(Dispatchers.IO) { cloudSync.fetchCloudBookmarks() }
                 val localBookmarks = bookmarkDao.getAllList()
 
-                // 用 URL + 标题 作为唯一标识进行比较（同URL不同标题视为不同书签）
+                // 用 路径 + URL + 标题 作为唯一标识进行比较
+                // 必须路径完全相同+书签相同，才视为相同
+                val localIdMap = localBookmarks.associateBy { it.id }
+                fun localFolderPath(bookmark: Bookmark): String {
+                    val parts = mutableListOf<String>()
+                    var parentId = bookmark.parentId
+                    while (parentId != null) {
+                        val parent = localIdMap[parentId] ?: break
+                        parts.add(0, parent.title)
+                        parentId = parent.parentId
+                    }
+                    return parts.joinToString("/")
+                }
+
+                val cloudIdMap = cloudBookmarks.associateBy { it.id }
+                fun cloudFolderPath(cloud: CloudSyncManager.CloudBookmark): String {
+                    val parts = mutableListOf<String>()
+                    var parentId = cloud.parentIndex
+                    while (parentId != null) {
+                        val parent = cloudIdMap[parentId] ?: break
+                        parts.add(0, parent.title)
+                        parentId = parent.parentIndex
+                    }
+                    return parts.joinToString("/")
+                }
+
                 val localKeys = localBookmarks.filter { !it.isFolder && it.url != null }
-                    .map { "${it.url}\n${it.title}" }.toSet()
+                    .map { "${localFolderPath(it)}\n${it.url}\n${it.title}" }.toSet()
                 val cloudKeys = cloudBookmarks.filter { !it.isFolder && it.url != null }
-                    .map { "${it.url}\n${it.title}" }.toSet()
+                    .map { "${cloudFolderPath(it)}\n${it.url}\n${it.title}" }.toSet()
 
                 // 本地有、云端没有的
                 val onlyLocal = localBookmarks.filter {
-                    !it.isFolder && it.url != null && "${it.url}\n${it.title}" !in cloudKeys
+                    !it.isFolder && it.url != null && "${localFolderPath(it)}\n${it.url}\n${it.title}" !in cloudKeys
                 }
                 // 云端有、本地没有的
                 val onlyCloud = cloudBookmarks.filter {
-                    !it.isFolder && it.url != null && "${it.url}\n${it.title}" !in localKeys
+                    !it.isFolder && it.url != null && "${cloudFolderPath(it)}\n${it.url}\n${it.title}" !in localKeys
                 }
 
                 showCompareResultDialog(onlyLocal, onlyCloud, localBookmarks, cloudBookmarks)
@@ -678,17 +703,18 @@ class BookmarkActivity : AppCompatActivity() {
         return parts.joinToString(" - ")
     }
 
-    /** 构建云端书签的完整路径 */
+    /** 构建云端书签的完整路径（按 parentId 查找，而非列表索引） */
     private fun buildCloudPath(
         cloud: CloudSyncManager.CloudBookmark,
         allCloud: List<CloudSyncManager.CloudBookmark>
     ): String {
+        val idMap = allCloud.associateBy { it.id }
         val parts = mutableListOf(cloud.title)
-        var parentIdx = cloud.parentIndex
-        while (parentIdx != null && parentIdx in allCloud.indices) {
-            val parent = allCloud[parentIdx]
+        var parentId = cloud.parentIndex
+        while (parentId != null) {
+            val parent = idMap[parentId] ?: break
             parts.add(0, "【${parent.title}】")
-            parentIdx = parent.parentIndex
+            parentId = parent.parentIndex
         }
         return parts.joinToString(" - ")
     }
@@ -770,6 +796,31 @@ class BookmarkActivity : AppCompatActivity() {
             val removedLocalBookmarks = mutableSetOf<Long>() // 本地书签id
             val removedCloudBookmarkIds = mutableSetOf<Int>() // 云端书签id
 
+            // 文件夹折叠状态（存储已折叠的文件夹名）
+            val collapsedLocalFolders = mutableSetOf<String>()
+            val collapsedCloudFolders = mutableSetOf<String>()
+
+            // 从完整列表 + 折叠状态构建可见项和显示文本
+            fun buildVisibleList(
+                allItems: List<CompareDisplayItem>,
+                collapsed: Set<String>
+            ): Pair<List<CompareDisplayItem>, List<String>> {
+                val visible = mutableListOf<CompareDisplayItem>()
+                val texts = mutableListOf<String>()
+                for (item in allItems) {
+                    if (item.isHeader) {
+                        val count = allItems.count { !it.isHeader && it.folderName == item.folderName }
+                        val arrow = if (item.folderName in collapsed) "▶" else "▼"
+                        visible.add(item)
+                        texts.add("📁 $arrow ${item.folderName} ($count)")
+                    } else if (item.folderName !in collapsed) {
+                        visible.add(item)
+                        texts.add(item.text)
+                    }
+                }
+                return visible to texts
+            }
+
             runOnUiThread {
                 var compareDialog: AlertDialog? = null
 
@@ -799,13 +850,38 @@ class BookmarkActivity : AppCompatActivity() {
                     setTypeface(null, android.graphics.Typeface.BOLD)
                     textSize = 15f
                 }
-                val localAdapter = ArrayAdapter(ctx, android.R.layout.simple_list_item_1,
-                    localDisplayItems.map { it.text }.toMutableList())
+                var (localVisibleItems, localTexts) = buildVisibleList(localDisplayItems, collapsedLocalFolders)
+                val localAdapter = ArrayAdapter(ctx, android.R.layout.simple_list_item_1, localTexts.toMutableList())
                 val localListView = ListView(ctx).apply {
                     adapter = localAdapter
                 }
+
+                fun refreshLocalList() {
+                    val (visible, texts) = buildVisibleList(localDisplayItems, collapsedLocalFolders)
+                    localVisibleItems = visible
+                    localAdapter.clear()
+                    localAdapter.addAll(texts)
+                    localAdapter.notifyDataSetChanged()
+                    localListView.post { expandListView(localListView) }
+                    localLabel.text = "本地独有（${localDisplayItems.count { !it.isHeader }} 项）"
+                }
+
+                // 点击文件夹标题：折叠/展开
+                localListView.setOnItemClickListener { _, _, position, _ ->
+                    val displayItem = localVisibleItems.getOrNull(position) ?: return@setOnItemClickListener
+                    if (displayItem.isHeader) {
+                        if (displayItem.folderName in collapsedLocalFolders) {
+                            collapsedLocalFolders.remove(displayItem.folderName)
+                        } else {
+                            collapsedLocalFolders.add(displayItem.folderName)
+                        }
+                        refreshLocalList()
+                    }
+                }
+
+                // 长按：删除
                 localListView.setOnItemLongClickListener { _, _, position, _ ->
-                    val displayItem = localDisplayItems[position]
+                    val displayItem = localVisibleItems.getOrNull(position) ?: return@setOnItemLongClickListener true
                     if (displayItem.isHeader) {
                         val folderName = displayItem.folderName
                         val folderItems = localDisplayItems.filter {
@@ -824,11 +900,8 @@ class BookmarkActivity : AppCompatActivity() {
                                         }
                                     }
                                     localDisplayItems.removeAll { it.folderName == folderName }
-                                    localAdapter.clear()
-                                    localAdapter.addAll(localDisplayItems.map { it.text })
-                                    localAdapter.notifyDataSetChanged()
-                                    localListView.post { expandListView(localListView) }
-                                    localLabel.text = "本地独有（${localDisplayItems.count { !it.isHeader }} 项）"
+                                    collapsedLocalFolders.remove(folderName)
+                                    refreshLocalList()
                                     Toast.makeText(ctx, "已删除 $count 条本地书签", Toast.LENGTH_SHORT).show()
                                 }
                             }
@@ -845,16 +918,13 @@ class BookmarkActivity : AppCompatActivity() {
                                         bookmarkDao.deleteById(bm.id)
                                         removedLocalBookmarks.add(bm.id)
                                     }
-                                    localDisplayItems.removeAt(position)
+                                    localDisplayItems.remove(displayItem)
                                     val folder = displayItem.folderName
                                     if (localDisplayItems.none { !it.isHeader && it.folderName == folder }) {
                                         localDisplayItems.removeAll { it.isHeader && it.folderName == folder }
+                                        collapsedLocalFolders.remove(folder)
                                     }
-                                    localAdapter.clear()
-                                    localAdapter.addAll(localDisplayItems.map { it.text })
-                                    localAdapter.notifyDataSetChanged()
-                                    localListView.post { expandListView(localListView) }
-                                    localLabel.text = "本地独有（${localDisplayItems.count { !it.isHeader }} 项）"
+                                    refreshLocalList()
                                     Toast.makeText(ctx, "已删除", Toast.LENGTH_SHORT).show()
                                 }
                             }
@@ -871,13 +941,38 @@ class BookmarkActivity : AppCompatActivity() {
                     setTypeface(null, android.graphics.Typeface.BOLD)
                     textSize = 15f
                 }
-                val cloudAdapter = ArrayAdapter(ctx, android.R.layout.simple_list_item_1,
-                    cloudDisplayItems.map { it.text }.toMutableList())
+                var (cloudVisibleItems, cloudTexts) = buildVisibleList(cloudDisplayItems, collapsedCloudFolders)
+                val cloudAdapter = ArrayAdapter(ctx, android.R.layout.simple_list_item_1, cloudTexts.toMutableList())
                 val cloudListView = ListView(ctx).apply {
                     adapter = cloudAdapter
                 }
+
+                fun refreshCloudList() {
+                    val (visible, texts) = buildVisibleList(cloudDisplayItems, collapsedCloudFolders)
+                    cloudVisibleItems = visible
+                    cloudAdapter.clear()
+                    cloudAdapter.addAll(texts)
+                    cloudAdapter.notifyDataSetChanged()
+                    cloudListView.post { expandListView(cloudListView) }
+                    cloudLabel.text = "云端独有（${cloudDisplayItems.count { !it.isHeader }} 项）"
+                }
+
+                // 点击文件夹标题：折叠/展开
+                cloudListView.setOnItemClickListener { _, _, position, _ ->
+                    val displayItem = cloudVisibleItems.getOrNull(position) ?: return@setOnItemClickListener
+                    if (displayItem.isHeader) {
+                        if (displayItem.folderName in collapsedCloudFolders) {
+                            collapsedCloudFolders.remove(displayItem.folderName)
+                        } else {
+                            collapsedCloudFolders.add(displayItem.folderName)
+                        }
+                        refreshCloudList()
+                    }
+                }
+
+                // 长按：删除
                 cloudListView.setOnItemLongClickListener { _, _, position, _ ->
-                    val displayItem = cloudDisplayItems[position]
+                    val displayItem = cloudVisibleItems.getOrNull(position) ?: return@setOnItemLongClickListener true
                     if (displayItem.isHeader) {
                         val folderName = displayItem.folderName
                         val folderItems = cloudDisplayItems.filter {
@@ -899,11 +994,8 @@ class BookmarkActivity : AppCompatActivity() {
                                             }
                                         }
                                         cloudDisplayItems.removeAll { it.folderName == folderName }
-                                        cloudAdapter.clear()
-                                        cloudAdapter.addAll(cloudDisplayItems.map { it.text })
-                                        cloudAdapter.notifyDataSetChanged()
-                                        cloudListView.post { expandListView(cloudListView) }
-                                        cloudLabel.text = "云端独有（${cloudDisplayItems.count { !it.isHeader }} 项）"
+                                        collapsedCloudFolders.remove(folderName)
+                                        refreshCloudList()
                                         Toast.makeText(ctx, "已删除 $count 条云端书签", Toast.LENGTH_SHORT).show()
                                     } catch (e: Exception) {
                                         Toast.makeText(ctx, "删除失败: ${e.message}", Toast.LENGTH_LONG).show()
@@ -926,24 +1018,21 @@ class BookmarkActivity : AppCompatActivity() {
                                                 removedCloudBookmarkIds.add(cb.id)
                                             }
                                         }
-                                        cloudDisplayItems.removeAt(position)
+                                        cloudDisplayItems.remove(displayItem)
                                         val folder = displayItem.folderName
                                         if (cloudDisplayItems.none { !it.isHeader && it.folderName == folder }) {
                                             cloudDisplayItems.removeAll { it.isHeader && it.folderName == folder }
+                                            collapsedCloudFolders.remove(folder)
                                         }
-                                        cloudAdapter.clear()
-                                        cloudAdapter.addAll(cloudDisplayItems.map { it.text })
-                                        cloudAdapter.notifyDataSetChanged()
-                                        cloudListView.post { expandListView(cloudListView) }
-                                        cloudLabel.text = "云端独有（${cloudDisplayItems.count { !it.isHeader }} 项）"
+                                        refreshCloudList()
                                         Toast.makeText(ctx, "已删除", Toast.LENGTH_SHORT).show()
                                     } catch (e: Exception) {
                                         Toast.makeText(ctx, "删除失败: ${e.message}", Toast.LENGTH_LONG).show()
                                     }
-                                    }
                                 }
-                                .setNegativeButton("取消", null)
-                                .show()
+                            }
+                            .setNegativeButton("取消", null)
+                            .show()
                     }
                     true
                 }
@@ -1032,6 +1121,88 @@ class BookmarkActivity : AppCompatActivity() {
         }
     }
 
+    /** 获取本地书签的父文件夹链（从根到直接父级的文件夹名列表） */
+    private fun getLocalFolderChain(bookmark: Bookmark, idMap: Map<Long, Bookmark>): List<String> {
+        val chain = mutableListOf<String>()
+        var parentId = bookmark.parentId
+        while (parentId != null) {
+            val parent = idMap[parentId] ?: break
+            chain.add(0, parent.title)
+            parentId = parent.parentId
+        }
+        return chain
+    }
+
+    /** 获取云端书签的父文件夹链（从根到直接父级的文件夹名列表） */
+    private fun getCloudFolderChain(
+        cloud: CloudSyncManager.CloudBookmark,
+        idMap: Map<Int, CloudSyncManager.CloudBookmark>
+    ): List<String> {
+        val chain = mutableListOf<String>()
+        var parentId = cloud.parentIndex
+        while (parentId != null) {
+            val parent = idMap[parentId] ?: break
+            chain.add(0, parent.title)
+            parentId = parent.parentIndex
+        }
+        return chain
+    }
+
+    /** 确保云端存在指定的文件夹路径，返回最末级文件夹的云端ID（空路径返回null=根目录） */
+    private suspend fun ensureCloudFolderPath(
+        folderChain: List<String>,
+        cloudSync: CloudSyncManager,
+        cache: MutableMap<String, Int>
+    ): Int? {
+        if (folderChain.isEmpty()) return null
+        var currentPath = ""
+        var parentId: Int? = null
+        for (folderName in folderChain) {
+            currentPath = if (currentPath.isEmpty()) folderName else "$currentPath/$folderName"
+            if (cache.containsKey(currentPath)) {
+                parentId = cache[currentPath]
+            } else {
+                val newId = cloudSync.createCloudFolder(folderName, parentId)
+                cache[currentPath] = newId
+                parentId = newId
+            }
+        }
+        return parentId
+    }
+
+    /** 确保本地存在指定的文件夹路径，返回最末级文件夹的本地ID（空路径返回null=根目录） */
+    private suspend fun ensureLocalFolderPath(
+        folderChain: List<String>,
+        cache: MutableMap<String, Long>
+    ): Long? {
+        if (folderChain.isEmpty()) return null
+        var currentPath = ""
+        var parentId: Long? = null
+        for (folderName in folderChain) {
+            currentPath = if (currentPath.isEmpty()) folderName else "$currentPath/$folderName"
+            if (cache.containsKey(currentPath)) {
+                parentId = cache[currentPath]
+            } else {
+                val maxPos = if (parentId != null) {
+                    bookmarkDao.getMaxPosition(parentId) ?: -1
+                } else {
+                    bookmarkDao.getMaxPositionRoot() ?: -1
+                }
+                val newId = bookmarkDao.insert(
+                    Bookmark(
+                        title = folderName,
+                        isFolder = true,
+                        parentId = parentId,
+                        position = maxPos + 1
+                    )
+                )
+                cache[currentPath] = newId
+                parentId = newId
+            }
+        }
+        return parentId
+    }
+
     private fun performBidirectionalSync(
         onlyLocal: List<Bookmark>,
         onlyCloud: List<CloudSyncManager.CloudBookmark>,
@@ -1050,26 +1221,47 @@ class BookmarkActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    // 上传本地独有的书签到云端
-                    for (bookmark in onlyLocal) {
-                        cloudSync.uploadSingleBookmark(bookmark)
+                    // 获取最新的完整数据用于路径解析
+                    val allLocal = bookmarkDao.getAllList()
+                    val allCloud = cloudSync.fetchCloudBookmarks()
+                    val localIdMap = allLocal.associateBy { it.id }
+                    val cloudIdMap = allCloud.associateBy { it.id }
+
+                    // === 上传本地独有的书签到云端（保留文件夹结构） ===
+                    // 预填充云端已有的文件夹路径缓存
+                    val cloudFolderCache = mutableMapOf<String, Int>()
+                    for (cf in allCloud.filter { it.isFolder }) {
+                        val chain = getCloudFolderChain(cf, cloudIdMap) + cf.title
+                        cloudFolderCache[chain.joinToString("/")] = cf.id
                     }
-                    // 下载云端独有的书签到本地
-                    val parentId = currentFolder?.id
-                    var maxPos = if (parentId != null) {
-                        bookmarkDao.getMaxPosition(parentId) ?: -1
-                    } else {
-                        bookmarkDao.getMaxPositionRoot() ?: -1
+                    for (bookmark in onlyLocal) {
+                        val folderChain = getLocalFolderChain(bookmark, localIdMap)
+                        val cloudParentId = ensureCloudFolderPath(folderChain, cloudSync, cloudFolderCache)
+                        cloudSync.uploadSingleBookmark(bookmark, cloudParentId)
+                    }
+
+                    // === 下载云端独有的书签到本地（保留文件夹结构） ===
+                    // 预填充本地已有的文件夹路径缓存
+                    val localFolderCache = mutableMapOf<String, Long>()
+                    for (lf in allLocal.filter { it.isFolder }) {
+                        val chain = getLocalFolderChain(lf, localIdMap) + lf.title
+                        localFolderCache[chain.joinToString("/")] = lf.id
                     }
                     for (cloud in onlyCloud) {
-                        maxPos++
+                        val folderChain = getCloudFolderChain(cloud, cloudIdMap)
+                        val localParentId = ensureLocalFolderPath(folderChain, localFolderCache)
+                        val maxPos = if (localParentId != null) {
+                            bookmarkDao.getMaxPosition(localParentId) ?: -1
+                        } else {
+                            bookmarkDao.getMaxPositionRoot() ?: -1
+                        }
                         bookmarkDao.insert(
                             Bookmark(
                                 title = cloud.title,
                                 url = cloud.url,
                                 isFolder = false,
-                                parentId = parentId,
-                                position = maxPos,
+                                parentId = localParentId,
+                                position = maxPos + 1,
                                 favicon = cloud.favicon
                             )
                         )
