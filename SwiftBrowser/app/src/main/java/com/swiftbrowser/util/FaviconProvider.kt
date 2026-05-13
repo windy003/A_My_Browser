@@ -43,6 +43,10 @@ object FaviconProvider {
     private const val PREFS_NAME = "favicon_link_cache"
     private const val PREFS_RESOLVED = "favicon_resolved_cache"
     private const val SEPARATOR = "\u001F" // 单元分隔符，用于拼接 URL 列表
+    // pageKey schema 版本。pageKey 计算规则变更时把这里 +1，
+    // init 会一次性清掉用旧规则生成的脏缓存。
+    private const val CACHE_SCHEMA_VERSION = 2
+    private const val SCHEMA_VERSION_KEY = "__schema_version__"
     private var prefs: SharedPreferences? = null
     private var resolvedPrefs: SharedPreferences? = null
 
@@ -52,8 +56,18 @@ object FaviconProvider {
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         resolvedPrefs = context.getSharedPreferences(PREFS_RESOLVED, Context.MODE_PRIVATE)
+
+        // pageKey schema 变更时一次性清理旧缓存，避免老用户继续读到错误的图标
+        val storedVersion = prefs?.getInt(SCHEMA_VERSION_KEY, 0) ?: 0
+        if (storedVersion != CACHE_SCHEMA_VERSION) {
+            prefs?.edit()?.clear()?.putInt(SCHEMA_VERSION_KEY, CACHE_SCHEMA_VERSION)?.apply()
+            resolvedPrefs?.edit()?.clear()?.apply()
+            return
+        }
+
         // 从 SharedPreferences 恢复到内存缓存
         prefs?.all?.forEach { (domain, value) ->
+            if (domain == SCHEMA_VERSION_KEY) return@forEach
             if (value is String && value.isNotEmpty()) {
                 linkIconCache.put(domain, value.split(SEPARATOR))
             }
@@ -108,12 +122,14 @@ object FaviconProvider {
     }
 
     /**
-     * 提取页面级缓存 key：域名 + 路径目录部分。
-     * 同一域名不同路径的页面（如 GitHub Pages 上的不同项目）
-     * 可能有不同的图标，需要分别缓存。
+     * 提取页面级缓存 key：域名 + 完整路径（含文件名）。
+     * 每个具体页面都按完整 URL 独立缓存图标，避免不同页面共享同一份图标。
      * 例如：
      *   https://windy003.github.io/web_project/ -> windy003.github.io/web_project
-     *   https://windy003.github.io/web_project/youtube-cc-finder/index.html -> windy003.github.io/web_project/youtube-cc-finder
+     *   https://windy003.github.io/web_project/github-repos_finder.html
+     *       -> windy003.github.io/web_project/github-repos_finder.html
+     *   https://windy003.github.io/web_project/youtube-cc-finder/index.html
+     *       -> windy003.github.io/web_project/youtube-cc-finder/index.html
      */
     private fun extractPageKey(url: String): String? {
         return try {
@@ -127,14 +143,7 @@ object FaviconProvider {
                 domain
             }
             val path = uri.path?.trimEnd('/') ?: ""
-            // 去掉最后的文件名部分（如 index.html），保留目录
-            val dirPath = if (path.contains('.') && path.lastIndexOf('/') > 0) {
-                // 可能是文件名（包含扩展名），取其目录
-                path.substring(0, path.lastIndexOf('/'))
-            } else {
-                path
-            }
-            if (dirPath.isEmpty()) hostPart else "$hostPart$dirPath"
+            if (path.isEmpty()) hostPart else "$hostPart$path"
         } catch (e: Exception) {
             null
         }
