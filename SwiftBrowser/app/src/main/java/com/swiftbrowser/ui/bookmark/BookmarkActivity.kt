@@ -261,7 +261,19 @@ class BookmarkActivity : AppCompatActivity() {
                     "复制文件夹到..." -> showCopyToFolderDialog(bookmark)
                     "移出到上级" -> {
                         lifecycleScope.launch {
-                            bookmarkDao.moveTo(bookmark.id, currentFolder?.parentId)
+                            val targetId = currentFolder?.parentId
+                            if (bookmark.url != null) {
+                                val duplicate = if (targetId != null) {
+                                    bookmarkDao.findDuplicate(bookmark.title, bookmark.url, targetId)
+                                } else {
+                                    bookmarkDao.findDuplicateInRoot(bookmark.title, bookmark.url)
+                                }
+                                if (duplicate != null) {
+                                    Toast.makeText(this@BookmarkActivity, "上级文件夹中已存在相同书签", Toast.LENGTH_SHORT).show()
+                                    return@launch
+                                }
+                            }
+                            bookmarkDao.moveTo(bookmark.id, targetId)
                         }
                     }
                     "删除" -> confirmDelete(bookmark)
@@ -287,6 +299,16 @@ class BookmarkActivity : AppCompatActivity() {
                 if (name.isNotEmpty()) {
                     lifecycleScope.launch {
                         val parentId = currentFolder?.id
+                        // 检查同文件夹下是否已有同名文件夹
+                        val siblings = if (parentId != null) {
+                            bookmarkDao.getChildrenList(parentId)
+                        } else {
+                            bookmarkDao.getRootItemsList()
+                        }
+                        if (siblings.any { it.isFolder && it.title == name }) {
+                            Toast.makeText(this@BookmarkActivity, "已存在同名文件夹", Toast.LENGTH_SHORT).show()
+                            return@launch
+                        }
                         val maxPos = if (parentId != null) {
                             bookmarkDao.getMaxPosition(parentId) ?: -1
                         } else {
@@ -347,7 +369,19 @@ class BookmarkActivity : AppCompatActivity() {
                     .setTitle(R.string.move_to_folder)
                     .setItems(targetNames.toTypedArray()) { _, which ->
                         lifecycleScope.launch {
-                            bookmarkDao.moveTo(bookmark.id, targetIds[which])
+                            val targetId = targetIds[which]
+                            if (bookmark.url != null) {
+                                val duplicate = if (targetId != null) {
+                                    bookmarkDao.findDuplicate(bookmark.title, bookmark.url, targetId)
+                                } else {
+                                    bookmarkDao.findDuplicateInRoot(bookmark.title, bookmark.url)
+                                }
+                                if (duplicate != null) {
+                                    Toast.makeText(this@BookmarkActivity, "目标文件夹中已存在相同书签", Toast.LENGTH_SHORT).show()
+                                    return@launch
+                                }
+                            }
+                            bookmarkDao.moveTo(bookmark.id, targetId)
                         }
                     }
                     .setNegativeButton(R.string.cancel, null)
@@ -395,14 +429,19 @@ class BookmarkActivity : AppCompatActivity() {
                             val targetId = targetIds[which]
                             if (bookmark.isFolder) {
                                 copyFolderRecursive(bookmark.id, targetId)
+                                Toast.makeText(
+                                    this@BookmarkActivity,
+                                    "已复制到目标文件夹",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             } else {
-                                copyBookmarkTo(bookmark, targetId)
+                                val copied = copyBookmarkTo(bookmark, targetId)
+                                Toast.makeText(
+                                    this@BookmarkActivity,
+                                    if (copied) "已复制到目标文件夹" else "目标文件夹中已存在相同书签",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
-                            Toast.makeText(
-                                this@BookmarkActivity,
-                                "已复制到目标文件夹",
-                                Toast.LENGTH_SHORT
-                            ).show()
                         }
                     }
                     .setNegativeButton(R.string.cancel, null)
@@ -411,8 +450,16 @@ class BookmarkActivity : AppCompatActivity() {
         }
     }
 
-    /** 复制单个书签到目标文件夹 */
-    private suspend fun copyBookmarkTo(bookmark: Bookmark, targetParentId: Long?) {
+    /** 复制单个书签到目标文件夹（同文件夹内相同标题+URL不重复） */
+    private suspend fun copyBookmarkTo(bookmark: Bookmark, targetParentId: Long?): Boolean {
+        if (bookmark.url != null) {
+            val duplicate = if (targetParentId != null) {
+                bookmarkDao.findDuplicate(bookmark.title, bookmark.url, targetParentId)
+            } else {
+                bookmarkDao.findDuplicateInRoot(bookmark.title, bookmark.url)
+            }
+            if (duplicate != null) return false
+        }
         val maxPos = if (targetParentId != null) {
             bookmarkDao.getMaxPosition(targetParentId) ?: -1
         } else {
@@ -428,6 +475,7 @@ class BookmarkActivity : AppCompatActivity() {
                 favicon = bookmark.favicon
             )
         )
+        return true
     }
 
     /** 递归复制文件夹及其所有内容到目标文件夹 */
@@ -1046,6 +1094,14 @@ class BookmarkActivity : AppCompatActivity() {
                     ).apply { setMargins(16, 8, 16, 0) }
                 }
 
+                val btnDedup = android.widget.Button(ctx).apply {
+                    text = "两端去重"
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { setMargins(16, 0, 16, 0) }
+                }
+
                 val btnRefresh = android.widget.Button(ctx).apply {
                     text = "刷新比较"
                     layoutParams = android.widget.LinearLayout.LayoutParams(
@@ -1094,6 +1150,7 @@ class BookmarkActivity : AppCompatActivity() {
                         android.widget.LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
                     ))
                     addView(btnBidirectional)
+                    addView(btnDedup)
                     addView(btnRefresh)
                 }
 
@@ -1111,6 +1168,10 @@ class BookmarkActivity : AppCompatActivity() {
                     val finalLocal = onlyLocal.filter { it.id !in removedLocalBookmarks }
                     val finalCloud = onlyCloud.filter { it.id !in removedCloudBookmarkIds }
                     performBidirectionalSync(finalLocal, finalCloud, compareDialog)
+                }
+
+                btnDedup.setOnClickListener {
+                    performDedup(dialog)
                 }
 
                 btnRefresh.setOnClickListener {
@@ -1203,6 +1264,60 @@ class BookmarkActivity : AppCompatActivity() {
         return parentId
     }
 
+    /** 两端去重：本地和云端各自在同文件夹下去除 title+url 相同的重复书签 */
+    private fun performDedup(parentDialog: AlertDialog? = null) {
+        val cloudSync = app.cloudSyncManager
+        lifecycleScope.launch {
+            try {
+                Toast.makeText(this@BookmarkActivity, "正在两端去重...", Toast.LENGTH_SHORT).show()
+
+                val (localRemoved, cloudRemoved) = withContext(Dispatchers.IO) {
+                    // === 本地去重 ===
+                    val allLocal = bookmarkDao.getAllList()
+                    // 按 parentId 分组，每组内按 title+url 去重（保留第一条）
+                    var localCount = 0
+                    val localNonFolders = allLocal.filter { !it.isFolder && it.url != null }
+                    val localGroups = localNonFolders.groupBy { Triple(it.parentId, it.title, it.url) }
+                    for ((_, group) in localGroups) {
+                        if (group.size > 1) {
+                            // 保留第一条，删除其余
+                            for (i in 1 until group.size) {
+                                bookmarkDao.deleteById(group[i].id)
+                                localCount++
+                            }
+                        }
+                    }
+
+                    // === 云端去重 ===
+                    var cloudCount = 0
+                    if (cloudSync.isLoggedIn) {
+                        val allCloud = cloudSync.fetchCloudBookmarks()
+                        val cloudNonFolders = allCloud.filter { !it.isFolder && it.url != null }
+                        val cloudGroups = cloudNonFolders.groupBy { Triple(it.parentIndex, it.title, it.url) }
+                        for ((_, group) in cloudGroups) {
+                            if (group.size > 1) {
+                                for (i in 1 until group.size) {
+                                    cloudSync.deleteCloudBookmark(group[i].id)
+                                    cloudCount++
+                                }
+                            }
+                        }
+                    }
+
+                    localCount to cloudCount
+                }
+
+                val msg = "去重完成：本地删除 $localRemoved 条，云端删除 $cloudRemoved 条"
+                Toast.makeText(this@BookmarkActivity, msg, Toast.LENGTH_LONG).show()
+                loadCurrentFolder()
+                parentDialog?.dismiss()
+                compareWithCloud()
+            } catch (e: Exception) {
+                Toast.makeText(this@BookmarkActivity, "去重失败: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     private fun performBidirectionalSync(
         onlyLocal: List<Bookmark>,
         onlyCloud: List<CloudSyncManager.CloudBookmark>,
@@ -1250,6 +1365,15 @@ class BookmarkActivity : AppCompatActivity() {
                     for (cloud in onlyCloud) {
                         val folderChain = getCloudFolderChain(cloud, cloudIdMap)
                         val localParentId = ensureLocalFolderPath(folderChain, localFolderCache)
+                        // 同文件夹内相同标题+URL不重复下载
+                        if (cloud.url != null) {
+                            val duplicate = if (localParentId != null) {
+                                bookmarkDao.findDuplicate(cloud.title, cloud.url, localParentId)
+                            } else {
+                                bookmarkDao.findDuplicateInRoot(cloud.title, cloud.url)
+                            }
+                            if (duplicate != null) continue
+                        }
                         val maxPos = if (localParentId != null) {
                             bookmarkDao.getMaxPosition(localParentId) ?: -1
                         } else {
@@ -1429,9 +1553,13 @@ class BookmarkActivity : AppCompatActivity() {
                 count += insertParsedItems(item.children, folderId)
             } else {
                 if (item.url.isNullOrBlank()) continue
-                // 跳过重复的 URL
-                val existing = bookmarkDao.getByUrl(item.url)
-                if (existing == null) {
+                // 同文件夹内相同标题+URL不重复导入
+                val duplicate = if (parentId != null) {
+                    bookmarkDao.findDuplicate(item.title, item.url, parentId)
+                } else {
+                    bookmarkDao.findDuplicateInRoot(item.title, item.url)
+                }
+                if (duplicate == null) {
                     val maxPos = if (parentId != null) {
                         bookmarkDao.getMaxPosition(parentId) ?: -1
                     } else {

@@ -37,6 +37,14 @@ interface BookmarkDao {
     @Query("SELECT * FROM bookmarks WHERE url = :url AND isFolder = 0 LIMIT 1")
     suspend fun getByUrl(url: String): Bookmark?
 
+    /** 同一文件夹内，相同标题+相同URL的书签是否已存在 */
+    @Query("SELECT * FROM bookmarks WHERE title = :title AND url = :url AND parentId = :parentId AND isFolder = 0 LIMIT 1")
+    suspend fun findDuplicate(title: String, url: String, parentId: Long): Bookmark?
+
+    /** 根目录下，相同标题+相同URL的书签是否已存在 */
+    @Query("SELECT * FROM bookmarks WHERE title = :title AND url = :url AND parentId IS NULL AND isFolder = 0 LIMIT 1")
+    suspend fun findDuplicateInRoot(title: String, url: String): Bookmark?
+
     /** 按名称找文件夹（用于查找"快速拨号"根文件夹） */
     @Query("SELECT * FROM bookmarks WHERE title = :name AND isFolder = 1 AND parentId IS NULL LIMIT 1")
     suspend fun getRootFolderByName(name: String): Bookmark?

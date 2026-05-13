@@ -1454,14 +1454,23 @@ class MainActivity : AppCompatActivity() {
                         bookmarkDao.update(updated)
                         Toast.makeText(this@MainActivity, "书签已更新", Toast.LENGTH_SHORT).show()
                     } else {
-                        // 新增书签
-                        val maxPos = if (parentId != null) {
-                            bookmarkDao.getMaxPosition(parentId) ?: -1
+                        // 新增书签：同一文件夹内相同标题+URL不重复添加
+                        val duplicate = if (parentId != null) {
+                            bookmarkDao.findDuplicate(finalTitle, url, parentId)
                         } else {
-                            bookmarkDao.getMaxPositionRoot() ?: -1
+                            bookmarkDao.findDuplicateInRoot(finalTitle, url)
                         }
-                        bookmarkDao.insert(Bookmark(title = finalTitle, url = url, parentId = parentId, position = maxPos + 1))
-                        Toast.makeText(this@MainActivity, R.string.bookmark_added, Toast.LENGTH_SHORT).show()
+                        if (duplicate != null) {
+                            Toast.makeText(this@MainActivity, "该书签已存在于此文件夹中", Toast.LENGTH_SHORT).show()
+                        } else {
+                            val maxPos = if (parentId != null) {
+                                bookmarkDao.getMaxPosition(parentId) ?: -1
+                            } else {
+                                bookmarkDao.getMaxPositionRoot() ?: -1
+                            }
+                            bookmarkDao.insert(Bookmark(title = finalTitle, url = url, parentId = parentId, position = maxPos + 1))
+                            Toast.makeText(this@MainActivity, R.string.bookmark_added, Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
             }
@@ -1474,12 +1483,12 @@ class MainActivity : AppCompatActivity() {
         val title = currentTitle ?: url
 
         lifecycleScope.launch {
-            val existing = bookmarkDao.getByUrl(url)
-            if (existing != null) {
-                Toast.makeText(this@MainActivity, "该网页已在书签中", Toast.LENGTH_SHORT).show()
+            val sdFolderId = app.speedDialFolderId
+            val duplicate = bookmarkDao.findDuplicate(title, url, sdFolderId)
+            if (duplicate != null) {
+                Toast.makeText(this@MainActivity, "该网页已在快速拨号中", Toast.LENGTH_SHORT).show()
                 return@launch
             }
-            val sdFolderId = app.speedDialFolderId
             val maxPos = bookmarkDao.getMaxPosition(sdFolderId) ?: -1
             bookmarkDao.insert(
                 Bookmark(title = title, url = url, parentId = sdFolderId, position = maxPos + 1)
