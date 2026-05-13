@@ -866,7 +866,7 @@ class MainActivity : AppCompatActivity() {
         speedDialLiveData?.removeObservers(this)
         speedDialObserverFolderId = sdFolderId
 
-        speedDialLiveData = bookmarkDao.getChildren(sdFolderId)
+        speedDialLiveData = bookmarkDao.getChildrenByPosition(sdFolderId)
         speedDialLiveData!!.observe(this) { children ->
             if (isReordering) return@observe
             lifecycleScope.launch {

@@ -22,6 +22,10 @@ interface BookmarkDao {
     @Query("SELECT * FROM bookmarks WHERE parentId = :parentId ORDER BY isFolder DESC, position ASC")
     suspend fun getChildrenList(parentId: Long): List<Bookmark>
 
+    /** 获取某个文件夹下的子项，纯按 position 排序（文件夹/站点可混排，供快速拨号使用） */
+    @Query("SELECT * FROM bookmarks WHERE parentId = :parentId ORDER BY position ASC")
+    fun getChildrenByPosition(parentId: Long): LiveData<List<Bookmark>>
+
     /** 获取根目录的子项 */
     @Query("SELECT * FROM bookmarks WHERE parentId IS NULL ORDER BY isFolder DESC, position ASC")
     fun getRootItems(): LiveData<List<Bookmark>>
