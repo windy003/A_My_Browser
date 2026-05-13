@@ -96,6 +96,25 @@ class MainActivity : AppCompatActivity() {
         pendingDownload = null
     }
 
+    // WebView 文件选择（<input type="file">）
+    private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
+    private val fileChooserLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val callback = fileChooserCallback ?: return@registerForActivityResult
+        val uris: Array<Uri>? = if (result.resultCode == RESULT_OK) {
+            val data = result.data
+            val clipData = data?.clipData
+            when {
+                clipData != null -> Array(clipData.itemCount) { i -> clipData.getItemAt(i).uri }
+                data?.data != null -> arrayOf(data.data!!)
+                else -> null
+            }
+        } else null
+        callback.onReceiveValue(uris)
+        fileChooserCallback = null
+    }
+
     override fun attachBaseContext(newBase: android.content.Context?) {
         val config = android.content.res.Configuration(newBase?.resources?.configuration)
         config.fontScale = 1.0f
@@ -501,6 +520,35 @@ class MainActivity : AppCompatActivity() {
                     requestedOrientation = originalOrientation
                     window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
                     window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+                }
+
+                // 处理 <input type="file"> 的文件选择
+                override fun onShowFileChooser(
+                    webView: WebView?,
+                    filePathCallback: ValueCallback<Array<Uri>>?,
+                    fileChooserParams: FileChooserParams?
+                ): Boolean {
+                    // 取消之前未完成的回调
+                    fileChooserCallback?.onReceiveValue(null)
+                    fileChooserCallback = filePathCallback
+
+                    // 不用 fileChooserParams.createIntent()——它会把网页 accept 属性写进 Intent，
+                    // 导致系统选择器按 MIME 过滤（如 .srt 这种 MimeTypeMap 没注册的扩展名会被置灰）。
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                        if (fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                        }
+                    }
+                    return try {
+                        fileChooserLauncher.launch(intent)
+                        true
+                    } catch (e: Exception) {
+                        fileChooserCallback = null
+                        Toast.makeText(this@MainActivity, R.string.file_chooser_unavailable, Toast.LENGTH_SHORT).show()
+                        false
+                    }
                 }
 
                 // 处理 OAuth 等需要弹窗的页面（如 Google 登录），复用当前 WebView
