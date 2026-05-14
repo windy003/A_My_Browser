@@ -494,14 +494,36 @@ class MainActivity : AppCompatActivity() {
                     binding.customViewContainer.visibility = View.VISIBLE
                     binding.customViewContainer.addView(view)
 
-                    // 横屏 + 全屏
-                    requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                     window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
                     window.decorView.systemUiVisibility = (
                         View.SYSTEM_UI_FLAG_FULLSCREEN
                         or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                         or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                     )
+
+                    // 根据视频实际宽高比决定方向：横屏视频自动旋转横屏，竖屏视频保持竖屏。
+                    // Why: 对竖屏视频强制 SENSOR_LANDSCAPE 会让网站的 fullscreenchange 逻辑
+                    // 主动退出全屏（"转一下就恢复"），因此先按视频宽高判断。
+                    val webView = activeTab?.webView
+                    if (webView != null) {
+                        webView.evaluateJavascript(
+                            "(function(){var vs=document.querySelectorAll('video');" +
+                            "for(var i=0;i<vs.length;i++){var v=vs[i];" +
+                            "if(v.videoWidth>0&&v.videoHeight>0)return v.videoWidth+','+v.videoHeight;}" +
+                            "return '';})();"
+                        ) { result ->
+                            val cleaned = result?.trim('"') ?: ""
+                            val parts = cleaned.split(",")
+                            val w = parts.getOrNull(0)?.toIntOrNull() ?: 0
+                            val h = parts.getOrNull(1)?.toIntOrNull() ?: 0
+                            requestedOrientation = when {
+                                w > 0 && h > 0 && h > w -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                else -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                            }
+                        }
+                    } else {
+                        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    }
                 }
 
                 override fun onHideCustomView() {
