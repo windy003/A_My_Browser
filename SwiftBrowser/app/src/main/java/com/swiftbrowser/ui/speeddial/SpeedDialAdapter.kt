@@ -1,10 +1,5 @@
 package com.swiftbrowser.ui.speeddial
 
-import android.content.Context
-import android.os.Build
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -30,18 +25,6 @@ class SpeedDialAdapter(
         const val TYPE_SITE = 0
         const val TYPE_FOLDER = 1
         private const val PAYLOAD_BATCH_MODE = "batch_mode"
-
-        /** 手机震动 50ms */
-        fun vibratePhone(context: Context) {
-            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val manager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
-                manager?.defaultVibrator
-            } else {
-                @Suppress("DEPRECATION")
-                context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-            }
-            vibrator?.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
-        }
     }
 
     override fun getItem(position: Int): SpeedDialItem {
@@ -202,7 +185,6 @@ class SpeedDialAdapter(
 
             binding.root.setOnLongClickListener {
                 if (batchDeleteMode) return@setOnLongClickListener false
-                vibratePhone(binding.root.context)
                 if (moveMode || folderMode) {
                     // 移动模式或文件夹模式：启动拖拽
                     binding.root.animate()
@@ -255,7 +237,6 @@ class SpeedDialAdapter(
                 onClickFolder(folder, children)
             }
             binding.root.setOnLongClickListener {
-                vibratePhone(binding.root.context)
                 if (moveMode || folderMode) {
                     binding.root.animate()
                         .scaleX(1.1f)
