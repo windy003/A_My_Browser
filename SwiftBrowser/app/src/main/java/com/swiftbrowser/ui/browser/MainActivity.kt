@@ -71,6 +71,7 @@ class MainActivity : AppCompatActivity() {
     private var isShowingWebView = false
     private var isReordering = false
     private var isToolbarHidden = false
+    private var isToolbarAnimating = false
     private lateinit var tabAdapter: TabAdapter
 
     // 全屏视频
@@ -620,14 +621,23 @@ class MainActivity : AppCompatActivity() {
                         totalDy = 0f
                     }
                     MotionEvent.ACTION_MOVE -> {
-                        val dy = lastTouchY - event.y // 正值=手指上滑=页面下滚
-                        totalDy += dy
-                        lastTouchY = event.y
-                        if (findTabByWebView(this) == activeTab && isShowingWebView) {
-                            if (totalDy > 30 && !isToolbarHidden) {
-                                hideToolbar()
-                            } else if (totalDy < -30 && isToolbarHidden) {
-                                showToolbar()
+                        // 工具栏动画期间 WebView 的高度/位置在变，event.y 会跳变；
+                        // 跳过累加并同步基准点，避免反馈循环导致屏幕抖动
+                        if (isToolbarAnimating) {
+                            lastTouchY = event.y
+                            totalDy = 0f
+                        } else {
+                            val dy = lastTouchY - event.y // 正值=手指上滑=页面下滚
+                            totalDy += dy
+                            lastTouchY = event.y
+                            if (findTabByWebView(this) == activeTab && isShowingWebView) {
+                                if (totalDy > 30 && !isToolbarHidden) {
+                                    hideToolbar()
+                                    totalDy = 0f
+                                } else if (totalDy < -30 && isToolbarHidden) {
+                                    showToolbar()
+                                    totalDy = 0f
+                                }
                             }
                         }
                     }
@@ -1365,10 +1375,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun hideToolbar() {
-        if (isToolbarHidden) return
+        if (isToolbarHidden || isToolbarAnimating) return
         isToolbarHidden = true
+        isToolbarAnimating = true
         val toolbarH = binding.toolbar.height
         val bottomH = binding.bottomBar.height
+        var finished = 0
+        val onAnimEnd = {
+            finished++
+            if (finished == 2) isToolbarAnimating = false
+        }
         // 通过 margin 动画平滑地释放空间，避免闪烁
         ValueAnimator.ofInt(0, toolbarH).apply {
             duration = 200
@@ -1379,6 +1395,10 @@ class MainActivity : AppCompatActivity() {
                 params.topMargin = -value
                 binding.toolbar.layoutParams = params
             }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) { onAnimEnd() }
+                override fun onAnimationCancel(animation: android.animation.Animator) { onAnimEnd() }
+            })
             start()
         }
         ValueAnimator.ofInt(0, bottomH).apply {
@@ -1390,17 +1410,27 @@ class MainActivity : AppCompatActivity() {
                 params.bottomMargin = -value
                 binding.bottomBar.layoutParams = params
             }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) { onAnimEnd() }
+                override fun onAnimationCancel(animation: android.animation.Animator) { onAnimEnd() }
+            })
             start()
         }
     }
 
     private fun showToolbar() {
-        if (!isToolbarHidden) return
+        if (!isToolbarHidden || isToolbarAnimating) return
         isToolbarHidden = false
+        isToolbarAnimating = true
         val toolbarParams = binding.toolbar.layoutParams as LinearLayout.LayoutParams
         val bottomParams = binding.bottomBar.layoutParams as LinearLayout.LayoutParams
         val curToolbarMargin = toolbarParams.topMargin
         val curBottomMargin = bottomParams.bottomMargin
+        var finished = 0
+        val onAnimEnd = {
+            finished++
+            if (finished == 2) isToolbarAnimating = false
+        }
         ValueAnimator.ofInt(curToolbarMargin, 0).apply {
             duration = 200
             interpolator = DecelerateInterpolator()
@@ -1410,6 +1440,10 @@ class MainActivity : AppCompatActivity() {
                 params.topMargin = value
                 binding.toolbar.layoutParams = params
             }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) { onAnimEnd() }
+                override fun onAnimationCancel(animation: android.animation.Animator) { onAnimEnd() }
+            })
             start()
         }
         ValueAnimator.ofInt(curBottomMargin, 0).apply {
@@ -1421,6 +1455,10 @@ class MainActivity : AppCompatActivity() {
                 params.bottomMargin = value
                 binding.bottomBar.layoutParams = params
             }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) { onAnimEnd() }
+                override fun onAnimationCancel(animation: android.animation.Animator) { onAnimEnd() }
+            })
             start()
         }
     }
