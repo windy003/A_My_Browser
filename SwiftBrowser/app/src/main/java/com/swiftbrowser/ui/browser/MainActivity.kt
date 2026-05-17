@@ -12,9 +12,14 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.net.Uri
+import android.content.Context
+import android.content.SharedPreferences
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.view.KeyEvent
+import android.widget.SeekBar
+import android.widget.TextView
 import java.io.File
 import android.view.DragEvent
 import android.view.MotionEvent
@@ -64,6 +69,18 @@ class MainActivity : AppCompatActivity() {
     private val bookmarkDao get() = app.database.bookmarkDao()
     private val historyDao get() = app.database.historyDao()
     private val cloudSync get() = app.cloudSyncManager
+
+    // 音量键翻页设置
+    // ratio 含义：0.0 = 一行高度（~50dp），1.0 = 整屏高度；线性插值
+    private val prefs: SharedPreferences by lazy {
+        getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+    }
+    private var volumeScrollEnabled: Boolean
+        get() = prefs.getBoolean("volume_scroll_enabled", true)
+        set(value) { prefs.edit().putBoolean("volume_scroll_enabled", value).apply() }
+    private var volumeScrollRatio: Float
+        get() = prefs.getFloat("volume_scroll_ratio", 1.0f)
+        set(value) { prefs.edit().putFloat("volume_scroll_ratio", value).apply() }
 
     // ==================== 多标签 ====================
     private val tabs = mutableListOf<Tab>()
@@ -1228,6 +1245,9 @@ class MainActivity : AppCompatActivity() {
             loginItem.title = if (cloudSync.isLoggedIn) getString(R.string.sign_out)
             else getString(R.string.sign_in)
 
+            val volumeToggleItem = popup.menu.findItem(R.id.action_volume_scroll_toggle)
+            volumeToggleItem.title = "音量键翻页:" + if (volumeScrollEnabled) "开" else "关"
+
             popup.setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     R.id.action_find_in_page -> {
@@ -1284,6 +1304,19 @@ class MainActivity : AppCompatActivity() {
                     }
                     R.id.action_batch_delete -> {
                         speedDialAdapter.enterBatchDeleteMode()
+                        true
+                    }
+                    R.id.action_volume_scroll_toggle -> {
+                        volumeScrollEnabled = !volumeScrollEnabled
+                        Toast.makeText(
+                            this,
+                            "音量键翻页已" + if (volumeScrollEnabled) "开启" else "关闭",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        true
+                    }
+                    R.id.action_volume_scroll_amount -> {
+                        showVolumeScrollAmountDialog()
                         true
                     }
                     R.id.action_login -> {
@@ -1694,6 +1727,94 @@ class MainActivity : AppCompatActivity() {
         if (query.isNotEmpty()) {
             activeTab?.webView?.findAllAsync(query)
         }
+    }
+
+    // ==================== 音量键翻页 ====================
+
+    private fun showVolumeScrollAmountDialog() {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 32, 48, 16)
+        }
+
+        val hint = TextView(this).apply {
+            text = "拖动滑块设置翻页幅度（左：一行，右：整屏）"
+        }
+        container.addView(hint)
+
+        val valueLabel = TextView(this).apply {
+            setPadding(0, 16, 0, 8)
+        }
+        container.addView(valueLabel)
+
+        val seekBar = SeekBar(this).apply {
+            max = 100
+            progress = (volumeScrollRatio * 100).toInt().coerceIn(0, 100)
+        }
+        container.addView(seekBar)
+
+        fun describe(progress: Int): String {
+            return when {
+                progress <= 0 -> "一行"
+                progress >= 100 -> "整屏"
+                else -> "${progress}%"
+            }
+        }
+        valueLabel.text = "当前：" + describe(seekBar.progress)
+
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                valueLabel.text = "当前：" + describe(progress)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+
+        AlertDialog.Builder(this)
+            .setTitle("音量键翻页幅度")
+            .setView(container)
+            .setPositiveButton("确认") { _, _ ->
+                volumeScrollRatio = seekBar.progress / 100f
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun computeVolumeScrollDistance(webView: WebView): Int {
+        // 一行高度约 50dp；整屏 = webView.height。线性插值。
+        val oneLinePx = (50 * resources.displayMetrics.density).toInt()
+        val fullScreen = webView.height
+        if (fullScreen <= oneLinePx) return oneLinePx
+        return oneLinePx + ((fullScreen - oneLinePx) * volumeScrollRatio).toInt()
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (volumeScrollEnabled && isShowingWebView && customView == null) {
+            val webView = activeTab?.webView
+            if (webView != null) {
+                when (keyCode) {
+                    KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                        webView.scrollBy(0, computeVolumeScrollDistance(webView))
+                        return true
+                    }
+                    KeyEvent.KEYCODE_VOLUME_UP -> {
+                        webView.scrollBy(0, -computeVolumeScrollDistance(webView))
+                        return true
+                    }
+                }
+            }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        // 拦截 KeyUp 防止系统音量 UI 闪现
+        if (volumeScrollEnabled && isShowingWebView && customView == null) {
+            if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+                return true
+            }
+        }
+        return super.onKeyUp(keyCode, event)
     }
 
     // ==================== 返回键 ====================

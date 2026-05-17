@@ -41,6 +41,14 @@
         android:icon="@drawable/ic_delete"
         android:title="批量删除" />
     <item
+        android:id="@+id/action_volume_scroll_toggle"
+        android:icon="@drawable/ic_arrow_down"
+        android:title="音量键翻页:开" />
+    <item
+        android:id="@+id/action_volume_scroll_amount"
+        android:icon="@drawable/ic_arrow_up"
+        android:title="音量键翻页幅度" />
+    <item
         android:id="@+id/action_login"
         android:icon="@drawable/ic_person"
         android:title="@string/sign_in" />
