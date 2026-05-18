@@ -82,6 +82,13 @@ class MainActivity : AppCompatActivity() {
         get() = prefs.getFloat("volume_scroll_ratio", 1.0f)
         set(value) { prefs.edit().putFloat("volume_scroll_ratio", value).apply() }
 
+    // 繁转简
+    private var t2sEnabled: Boolean
+        get() = prefs.getBoolean("t2s_enabled", false)
+        set(value) { prefs.edit().putBoolean("t2s_enabled", value).apply() }
+    // 缓存的转换 JS（包含字典）；首次需要时从 assets 加载
+    private var t2sScriptCache: String? = null
+
     // ==================== 多标签 ====================
     private val tabs = mutableListOf<Tab>()
     private var activeTab: Tab? = null
@@ -406,6 +413,10 @@ class MainActivity : AppCompatActivity() {
                                 )
                             )
                         }
+                    }
+                    // 繁转简（如已开启）
+                    if (t2sEnabled && view != null) {
+                        applyT2S(view)
                     }
                     // 注入广告清理脚本：移除广告覆盖层，阻止广告点击劫持
                     view?.evaluateJavascript("""
@@ -1248,6 +1259,9 @@ class MainActivity : AppCompatActivity() {
             val volumeToggleItem = popup.menu.findItem(R.id.action_volume_scroll_toggle)
             volumeToggleItem.title = "音量键翻页:" + if (volumeScrollEnabled) "开" else "关"
 
+            val t2sToggleItem = popup.menu.findItem(R.id.action_t2s_toggle)
+            t2sToggleItem.title = "繁转简:" + if (t2sEnabled) "开" else "关"
+
             popup.setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     R.id.action_find_in_page -> {
@@ -1319,6 +1333,24 @@ class MainActivity : AppCompatActivity() {
                         showVolumeScrollAmountDialog()
                         true
                     }
+                    R.id.action_t2s_toggle -> {
+                        t2sEnabled = !t2sEnabled
+                        Toast.makeText(
+                            this,
+                            "繁转简已" + if (t2sEnabled) "开启" else "关闭",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        if (t2sEnabled) {
+                            // 立即对当前所有标签页应用转换
+                            for (tab in tabs) {
+                                tab.webView?.let { applyT2S(it) }
+                            }
+                        } else {
+                            // 关闭时重新加载当前页以恢复原文
+                            activeTab?.webView?.reload()
+                        }
+                        true
+                    }
                     R.id.action_login -> {
                         if (cloudSync.isLoggedIn) {
                             cloudSync.logout()
@@ -1378,6 +1410,105 @@ class MainActivity : AppCompatActivity() {
             speedDialAdapter.notifyDataSetChanged()
             Toast.makeText(this@MainActivity, "图标已刷新", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    // ==================== 繁转简 ====================
+
+    private fun applyT2S(webView: WebView) {
+        val script = t2sScriptCache ?: buildT2SScript().also { t2sScriptCache = it }
+        webView.evaluateJavascript(script, null)
+    }
+
+    private fun buildT2SScript(): String {
+        val dict = assets.open("t2s.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
+        // 遍历 DOM 文本节点替换；用 MutationObserver 处理动态新增内容;
+        // 跳过 <script>/<style>/<textarea>/<input>，避免破坏脚本与用户输入。
+        return """
+            (function() {
+              if (window.__t2sInstalled) {
+                if (window.__t2sRun) window.__t2sRun();
+                return;
+              }
+              window.__t2sInstalled = true;
+              var MAP = $dict;
+              function conv(text) {
+                if (!text) return text;
+                var out = '';
+                for (var i = 0; i < text.length; ) {
+                  var code = text.charCodeAt(i);
+                  var ch;
+                  if (code >= 0xD800 && code <= 0xDBFF && i + 1 < text.length) {
+                    ch = text.substr(i, 2);
+                    i += 2;
+                  } else {
+                    ch = text.charAt(i);
+                    i += 1;
+                  }
+                  out += MAP[ch] || ch;
+                }
+                return out;
+              }
+              var SKIP = { SCRIPT: 1, STYLE: 1, TEXTAREA: 1, INPUT: 1, CODE: 1, PRE: 1 };
+              function walk(node) {
+                if (!node) return;
+                if (node.nodeType === 3) {
+                  var v = node.nodeValue;
+                  if (v) {
+                    var c = conv(v);
+                    if (c !== v) node.nodeValue = c;
+                  }
+                  return;
+                }
+                if (node.nodeType !== 1) return;
+                if (SKIP[node.nodeName]) return;
+                var ph = node.getAttribute && node.getAttribute('placeholder');
+                if (ph) {
+                  var cp = conv(ph);
+                  if (cp !== ph) node.setAttribute('placeholder', cp);
+                }
+                var ttl = node.getAttribute && node.getAttribute('title');
+                if (ttl) {
+                  var ct = conv(ttl);
+                  if (ct !== ttl) node.setAttribute('title', ct);
+                }
+                var kids = node.childNodes;
+                for (var i = 0; i < kids.length; i++) walk(kids[i]);
+              }
+              window.__t2sRun = function() {
+                if (document.body) walk(document.body);
+                if (document.title) {
+                  var nt = conv(document.title);
+                  if (nt !== document.title) document.title = nt;
+                }
+              };
+              window.__t2sRun();
+              try {
+                var mo = new MutationObserver(function(muts) {
+                  for (var i = 0; i < muts.length; i++) {
+                    var m = muts[i];
+                    if (m.type === 'characterData') {
+                      var t = m.target;
+                      if (t && t.nodeType === 3) {
+                        var p = t.parentNode;
+                        if (!(p && SKIP[p.nodeName])) {
+                          var v = t.nodeValue;
+                          if (v) {
+                            var c = conv(v);
+                            if (c !== v) t.nodeValue = c;
+                          }
+                        }
+                      }
+                    } else if (m.addedNodes) {
+                      for (var j = 0; j < m.addedNodes.length; j++) walk(m.addedNodes[j]);
+                    }
+                  }
+                });
+                mo.observe(document.documentElement || document.body, {
+                  childList: true, subtree: true, characterData: true
+                });
+              } catch (e) {}
+            })();
+        """.trimIndent()
     }
 
     // ==================== 核心功能 ====================

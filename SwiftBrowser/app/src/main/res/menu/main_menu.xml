@@ -49,6 +49,10 @@
         android:icon="@drawable/ic_arrow_up"
         android:title="音量键翻页幅度" />
     <item
+        android:id="@+id/action_t2s_toggle"
+        android:icon="@drawable/ic_refresh"
+        android:title="繁转简:关" />
+    <item
         android:id="@+id/action_login"
         android:icon="@drawable/ic_person"
         android:title="@string/sign_in" />
