@@ -965,6 +965,8 @@ class MainActivity : AppCompatActivity() {
 
     private var openFolderId: Long = -1L
     private lateinit var folderAdapter: SpeedDialAdapter
+    private var folderLiveData: androidx.lifecycle.LiveData<List<Bookmark>>? = null
+    private var folderObserver: androidx.lifecycle.Observer<List<Bookmark>>? = null
 
     private fun showFolderContent(folder: Bookmark, children: List<Bookmark>) {
         openFolderId = folder.id
@@ -1017,15 +1019,17 @@ class MainActivity : AppCompatActivity() {
             onLongClickFolder = { }
         )
 
-        // 如果当前处于移动模式，同步给 folderAdapter
-        if (speedDialAdapter.moveMode) {
+        // 外层处于移动模式 / 移入文件夹模式时，文件夹内同步进入移动模式以支持长按拖拽排序
+        // （文件夹内没有子文件夹，所以"移入文件夹模式"在此处退化为排序模式）
+        if (speedDialAdapter.moveMode || speedDialAdapter.folderMode) {
             folderAdapter.enterMoveMode()
         }
 
-        // 为文件夹内容配置 ItemTouchHelper 用于拖拽排序
+        // 为文件夹内容配置 ItemTouchHelper 用于拖拽排序（与根目录一致：isReordering 保护写库期间外层 LiveData observer 触发）
         val folderDragCallback = SpeedDialDragHelper(
             adapter = folderAdapter,
             onReorder = { reorderedList ->
+                isReordering = true
                 lifecycleScope.launch {
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         app.database.runInTransaction {
@@ -1040,6 +1044,7 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
                     }
+                    isReordering = false
                 }
             }
         )
@@ -1051,7 +1056,32 @@ class MainActivity : AppCompatActivity() {
         }
         folderItemTouchHelper!!.attachToRecyclerView(binding.rvFolderItems)
 
-        folderAdapter.submitList(children.map { SpeedDialItem.Site(it) })
+        // 给 folderAdapter 接上 LiveData，让数据库写入后能自动同步回 adapter
+        // 这跟根目录 attachSpeedDialObserver 的模式完全一致，由此修复"拖完松手回弹"的问题
+        detachFolderObserver()
+        folderLiveData = bookmarkDao.getChildrenByPosition(folder.id)
+        folderObserver = androidx.lifecycle.Observer { items ->
+            if (isReordering) return@Observer
+            when {
+                items.isEmpty() -> {
+                    lifecycleScope.launch {
+                        bookmarkDao.deleteById(folder.id)
+                    }
+                    closeFolderOverlay()
+                }
+                items.size == 1 -> {
+                    lifecycleScope.launch {
+                        bookmarkDao.moveTo(items[0].id, app.speedDialFolderId)
+                        bookmarkDao.deleteById(folder.id)
+                    }
+                    closeFolderOverlay()
+                }
+                else -> {
+                    folderAdapter.submitList(items.map { SpeedDialItem.Site(it) })
+                }
+            }
+        }
+        folderLiveData!!.observe(this, folderObserver!!)
 
         binding.folderOverlay.setOnClickListener { closeFolderOverlay() }
         binding.folderCard.setOnClickListener { /* 阻止穿透 */ }
@@ -1064,7 +1094,7 @@ class MainActivity : AppCompatActivity() {
                     val bookmark = event.localState as? Bookmark ?: return@setOnDragListener false
                     lifecycleScope.launch {
                         bookmarkDao.moveTo(bookmark.id, app.speedDialFolderId)
-                        refreshFolderOverlay()
+                        // LiveData 会自动刷新 folderAdapter
                     }
                     true
                 }
@@ -1085,25 +1115,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun closeFolderOverlay() {
+        detachFolderObserver()
         binding.folderOverlay.visibility = View.GONE
         openFolderId = -1L
     }
 
-    private fun refreshFolderOverlay() {
-        if (openFolderId == -1L) return
-        lifecycleScope.launch {
-            val children = bookmarkDao.getChildrenList(openFolderId)
-            if (children.isEmpty()) {
-                bookmarkDao.getById(openFolderId)?.let { bookmarkDao.deleteById(it.id) }
-                closeFolderOverlay()
-            } else if (children.size == 1) {
-                bookmarkDao.moveTo(children[0].id, app.speedDialFolderId)
-                bookmarkDao.getById(openFolderId)?.let { bookmarkDao.deleteById(it.id) }
-                closeFolderOverlay()
-            } else {
-                folderAdapter.submitList(children.map { SpeedDialItem.Site(it) })
-            }
-        }
+    private fun detachFolderObserver() {
+        folderObserver?.let { obs -> folderLiveData?.removeObserver(obs) }
+        folderLiveData = null
+        folderObserver = null
     }
 
     private fun showSpeedDialSiteOptions(bookmark: Bookmark) {
@@ -1393,6 +1413,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun exitFolderMode() {
         speedDialAdapter.exitFolderMode()
+        // 文件夹内部的同步移动模式也一起退出
+        if (::folderAdapter.isInitialized) folderAdapter.exitMoveMode()
         binding.tvMoveMode.visibility = View.GONE
     }
 
@@ -1967,6 +1989,9 @@ class MainActivity : AppCompatActivity() {
         }
         if (binding.findBar.visibility == View.VISIBLE) {
             hideFindBar()
+        } else if (binding.folderOverlay.visibility == View.VISIBLE) {
+            // 优先关闭文件夹弹层（外层 moveMode / folderMode 保持，返回主页后仍可继续操作）
+            closeFolderOverlay()
         } else if (speedDialAdapter.moveMode) {
             exitMoveMode()
         } else if (speedDialAdapter.folderMode) {
@@ -1975,8 +2000,6 @@ class MainActivity : AppCompatActivity() {
             speedDialAdapter.exitBatchDeleteMode()
         } else if (binding.tabOverlay.visibility == View.VISIBLE) {
             hideTabOverlay()
-        } else if (binding.folderOverlay.visibility == View.VISIBLE) {
-            closeFolderOverlay()
         } else if (isShowingWebView && activeTab?.webView?.canGoBack() == true) {
             activeTab?.webView?.goBack()
         } else if (isShowingWebView) {

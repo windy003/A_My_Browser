@@ -233,7 +233,7 @@ class SpeedDialAdapter(
             }
 
             binding.root.setOnClickListener {
-                if (moveMode || folderMode) return@setOnClickListener
+                // 在移动模式 / 移入文件夹模式下，点击文件夹依然打开文件夹（在内部可以排序）
                 onClickFolder(folder, children)
             }
             binding.root.setOnLongClickListener {
