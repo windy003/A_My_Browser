@@ -2,3 +2,5 @@
 SwiftBrowser/app/build/
 SwiftBrowser/.idea/
 SwiftBrowser/.gradle/
+cloudflare-worker/.wrangler/
+cloudflare-worker/node_modules/
