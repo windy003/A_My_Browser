@@ -1257,7 +1257,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnForward.setOnClickListener {
-            activeTab?.webView?.let { if (it.canGoForward()) it.goForward() }
+            val url = activeTab?.url
+            if (!isShowingWebView && url != null && url != "about:blank") {
+                // 在快速拨号页时，前进键恢复到当前标签之前浏览的页面
+                binding.etUrl.setText(url)
+                showWebView()
+            } else {
+                activeTab?.webView?.let { if (it.canGoForward()) it.goForward() }
+            }
         }
 
         binding.btnHome.setOnClickListener { showHomePage() }
