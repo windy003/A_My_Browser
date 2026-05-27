@@ -3,7 +3,6 @@ package com.swiftbrowser.ui.speeddial
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import java.util.Collections
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
@@ -45,11 +44,17 @@ class SpeedDialAdapter(
         dragOrderList = currentList.toMutableList()
     }
 
-    /** 拖拽中交换两个位置的数据 */
-    fun swapDragItems(from: Int, to: Int): Boolean {
+    /**
+     * 拖拽中把源头移动到目标位置（插入语义，不是交换）。
+     * from < to：源头插到目标的右边；from > to：源头插到目标的左边。
+     * 中间的图标整体平移一格，目标图标只相对源头移动一格，
+     * 不会跳到源头原来的位置。
+     */
+    fun moveDragItem(from: Int, to: Int): Boolean {
         val list = dragOrderList ?: return false
         if (from in list.indices && to in list.indices && from != to) {
-            Collections.swap(list, from, to)
+            val item = list.removeAt(from)
+            list.add(to, item)
             notifyItemMoved(from, to)
             return true
         }

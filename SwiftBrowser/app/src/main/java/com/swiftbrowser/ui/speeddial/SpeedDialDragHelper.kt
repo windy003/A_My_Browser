@@ -52,8 +52,9 @@ class SpeedDialDragHelper(
             return true
         }
 
-        // 普通移动模式：交换位置
-        adapter.swapDragItems(from, to)
+        // 普通移动模式：插入到目标的左边或右边（不交换位置）
+        // from < to：插到目标右边；from > to：插到目标左边
+        adapter.moveDragItem(from, to)
         hasMoved = true
         return true
     }
