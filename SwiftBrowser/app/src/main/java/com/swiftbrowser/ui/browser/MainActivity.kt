@@ -52,6 +52,7 @@ import com.swiftbrowser.databinding.ActivityMainBinding
 import com.swiftbrowser.ui.auth.LoginActivity
 import com.swiftbrowser.ui.bookmark.BookmarkActivity
 import com.swiftbrowser.ui.history.HistoryActivity
+import com.swiftbrowser.ui.speeddial.LiftAction
 import com.swiftbrowser.ui.speeddial.SpeedDialAdapter
 import com.swiftbrowser.ui.speeddial.SpeedDialDragHelper
 import com.swiftbrowser.ui.speeddial.SpeedDialItem
@@ -812,12 +813,20 @@ class MainActivity : AppCompatActivity() {
     private fun setupSpeedDial() {
         speedDialAdapter = SpeedDialAdapter(
             onClickSite = { bookmark -> loadUrl(bookmark.url ?: "") },
-            onLongClickSite = { bookmark -> showSpeedDialSiteOptions(bookmark) },
             onClickFolder = { folder, children -> showFolderContent(folder, children) },
-            onLongClickFolder = { folder -> showFolderOptions(folder) },
+            onDeleteSite = { bookmark -> confirmDeleteSpeedDial(bookmark) },
+            onRenameSite = { bookmark -> showEditBookmarkDialog(bookmark) },
+            onDeleteFolder = { folder -> confirmDeleteFolder(folder) },
+            onRenameFolder = { folder -> showRenameFolderDialog(folder) },
             onStartDrag = { viewHolder -> itemTouchHelper.startDrag(viewHolder) },
-            onBatchDelete = { bookmark -> confirmDeleteSpeedDial(bookmark) }
+            onBatchDelete = { bookmark -> confirmDeleteSpeedDial(bookmark) },
+            onShowLiftMenu = { anchor, actions -> showLiftMenu(anchor, actions, speedDialAdapter) },
+            onHideLiftMenu = { hideLiftMenuView() }
         )
+
+        // 提起菜单浮层：点空白处关闭，点卡片本身不穿透
+        binding.liftMenuOverlay.setOnClickListener { liftedAdapter?.clearLift() ?: hideLiftMenuView() }
+        binding.liftMenuCard.setOnClickListener { /* 吸收点击，避免穿透到浮层关闭 */ }
 
         binding.rvSpeedDial.apply {
             layoutManager = GridLayoutManager(this@MainActivity, 5)
@@ -831,11 +840,8 @@ class MainActivity : AppCompatActivity() {
                     if (speedDialAdapter.batchDeleteMode) {
                         speedDialAdapter.exitBatchDeleteMode()
                     }
-                    if (speedDialAdapter.moveMode) {
-                        exitMoveMode()
-                    }
-                    if (speedDialAdapter.folderMode) {
-                        exitFolderMode()
+                    if (speedDialAdapter.hasLifted()) {
+                        speedDialAdapter.clearLift()
                     }
                 }
             }
@@ -995,39 +1001,26 @@ class MainActivity : AppCompatActivity() {
 
         folderAdapter = SpeedDialAdapter(
             onClickSite = { bookmark ->
-                if (folderAdapter.moveMode) return@SpeedDialAdapter
                 closeFolderOverlay()
                 loadUrl(bookmark.url ?: "")
             },
-            onLongClickSite = { bookmark -> showSpeedDialSiteOptions(bookmark) },
-            onStartDrag = { viewHolder ->
-                if (folderAdapter.moveMode) {
-                    // 移动模式：用 ItemTouchHelper 拖拽排序
-                    folderItemTouchHelper?.startDrag(viewHolder)
-                } else {
-                    // 非移动模式：用 Android 拖放 API 移出文件夹
-                    val position = viewHolder.bindingAdapterPosition
-                    if (position == RecyclerView.NO_POSITION) return@SpeedDialAdapter
-                    val item = folderAdapter.currentList.getOrNull(position) as? SpeedDialItem.Site ?: return@SpeedDialAdapter
-                    val bookmark = item.bookmark
-                    val clipData = ClipData.newPlainText("bookmarkId", bookmark.id.toString())
-                    val shadow = View.DragShadowBuilder(viewHolder.itemView)
-                    binding.rvFolderItems.startDragAndDrop(clipData, shadow, bookmark, 0)
-                }
-            },
             onClickFolder = { _, _ -> },
-            onLongClickFolder = { }
+            onDeleteSite = { bookmark -> confirmDeleteSpeedDial(bookmark) },
+            onRenameSite = { bookmark -> showEditBookmarkDialog(bookmark) },
+            // 文件夹内的站点提起后可"移出"到快速拨号根目录
+            onMoveOutSite = { bookmark ->
+                lifecycleScope.launch { bookmarkDao.moveTo(bookmark.id, app.speedDialFolderId) }
+            },
+            onStartDrag = { viewHolder -> folderItemTouchHelper?.startDrag(viewHolder) },
+            onShowLiftMenu = { anchor, actions -> showLiftMenu(anchor, actions, folderAdapter) },
+            onHideLiftMenu = { hideLiftMenuView() }
         )
 
-        // 外层处于移动模式 / 移入文件夹模式时，文件夹内同步进入移动模式以支持长按拖拽排序
-        // （文件夹内没有子文件夹，所以"移入文件夹模式"在此处退化为排序模式）
-        if (speedDialAdapter.moveMode || speedDialAdapter.folderMode) {
-            folderAdapter.enterMoveMode()
-        }
-
         // 为文件夹内容配置 ItemTouchHelper 用于拖拽排序（与根目录一致：isReordering 保护写库期间外层 LiveData observer 触发）
+        // 文件夹内只含站点、不支持嵌套文件夹，故关闭"中心悬停合并"
         val folderDragCallback = SpeedDialDragHelper(
             adapter = folderAdapter,
+            allowMerge = false,
             onReorder = { reorderedList ->
                 isReordering = true
                 lifecycleScope.launch {
@@ -1115,6 +1108,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun closeFolderOverlay() {
+        // 收起文件夹内可能残留的提起菜单
+        if (::folderAdapter.isInitialized && folderAdapter.hasLifted()) folderAdapter.clearLift()
         detachFolderObserver()
         binding.folderOverlay.visibility = View.GONE
         openFolderId = -1L
@@ -1124,44 +1119,6 @@ class MainActivity : AppCompatActivity() {
         folderObserver?.let { obs -> folderLiveData?.removeObserver(obs) }
         folderLiveData = null
         folderObserver = null
-    }
-
-    private fun showSpeedDialSiteOptions(bookmark: Bookmark) {
-        val moveOutLabel = "移出文件夹"
-        val options = mutableListOf("编辑", "删除")
-        if (bookmark.parentId != app.speedDialFolderId) {
-            options.add(moveOutLabel)
-        }
-
-        AlertDialog.Builder(this, R.style.DialogTheme)
-            .setTitle(bookmark.title)
-            .setItems(options.toTypedArray()) { _, which ->
-                when (options[which]) {
-                    "编辑" -> showEditBookmarkDialog(bookmark)
-                    "删除" -> confirmDeleteSpeedDial(bookmark)
-                    moveOutLabel -> {
-                        lifecycleScope.launch {
-                            bookmarkDao.moveTo(bookmark.id, app.speedDialFolderId)
-                        }
-                    }
-                }
-            }
-            .show()
-    }
-
-    private fun showFolderOptions(folder: Bookmark) {
-        AlertDialog.Builder(this, R.style.DialogTheme)
-            .setTitle(folder.title)
-            .setItems(arrayOf(
-                getString(R.string.rename_folder),
-                getString(R.string.delete_folder)
-            )) { _, which ->
-                when (which) {
-                    0 -> showRenameFolderDialog(folder)
-                    1 -> confirmDeleteFolder(folder)
-                }
-            }
-            .show()
     }
 
     private fun showRenameFolderDialog(folder: Bookmark) {
@@ -1335,14 +1292,6 @@ class MainActivity : AppCompatActivity() {
                         }
                         true
                     }
-                    R.id.action_move_mode -> {
-                        enterMoveMode()
-                        true
-                    }
-                    R.id.action_move_to_folder -> {
-                        enterFolderMode()
-                        true
-                    }
                     R.id.action_batch_delete -> {
                         speedDialAdapter.enterBatchDeleteMode()
                         true
@@ -1394,36 +1343,67 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun enterMoveMode() {
-        speedDialAdapter.enterMoveMode()
-        if (::folderAdapter.isInitialized) folderAdapter.enterMoveMode()
-        binding.tvMoveMode.text = "移动模式 — 长按图标拖拽排序，点击空白区域退出"
-        binding.tvMoveMode.visibility = View.VISIBLE
-        Toast.makeText(this, "已进入移动模式，长按图标拖拽排序", Toast.LENGTH_SHORT).show()
+    // ==================== 长按提起菜单 ====================
+
+    /** 当前持有提起态的适配器（根目录 / 文件夹内），用于关闭菜单时清除对应状态 */
+    private var liftedAdapter: SpeedDialAdapter? = null
+
+    /** 在锚点（被提起的图标）附近弹出大菜单 */
+    private fun showLiftMenu(anchor: View, actions: List<LiftAction>, source: SpeedDialAdapter) {
+        liftedAdapter = source
+
+        val container = binding.liftMenuContainer
+        container.removeAllViews()
+        for (action in actions) {
+            val btn = layoutInflater.inflate(
+                R.layout.item_lift_menu_button, container, false
+            ) as TextView
+            btn.text = action.label
+            if (action.destructive) {
+                btn.setTextColor(ContextCompat.getColor(this, R.color.red))
+            }
+            btn.setOnClickListener {
+                source.clearLift()
+                action.onClick()
+            }
+            container.addView(btn)
+        }
+
+        binding.liftMenuOverlay.visibility = View.VISIBLE
+        // 等卡片测量完成后再定位到图标旁边
+        binding.liftMenuCard.post {
+            val a = IntArray(2)
+            anchor.getLocationOnScreen(a)
+            val o = IntArray(2)
+            binding.liftMenuOverlay.getLocationOnScreen(o)
+            val ax = a[0] - o[0]
+            val ay = a[1] - o[1]
+            val cw = binding.liftMenuCard.width
+            val ch = binding.liftMenuCard.height
+            val ow = binding.liftMenuOverlay.width
+            val oh = binding.liftMenuOverlay.height
+            val gap = dpToPx(8)
+
+            var x = ax + anchor.width / 2 - cw / 2
+            var y = ay + anchor.height + gap
+            // 下方放不下就放到图标上方
+            if (y + ch > oh - gap) y = ay - ch - gap
+            x = x.coerceIn(gap, (ow - cw - gap).coerceAtLeast(gap))
+            y = y.coerceIn(gap, (oh - ch - gap).coerceAtLeast(gap))
+
+            binding.liftMenuCard.translationX = x.toFloat()
+            binding.liftMenuCard.translationY = y.toFloat()
+        }
     }
 
-    private fun exitMoveMode() {
-        speedDialAdapter.exitMoveMode()
-        if (::folderAdapter.isInitialized) folderAdapter.exitMoveMode()
-        binding.tvMoveMode.visibility = View.GONE
+    /** 仅收起菜单视图（提起态的清除由适配器负责） */
+    private fun hideLiftMenuView() {
+        binding.liftMenuOverlay.visibility = View.GONE
+        binding.liftMenuContainer.removeAllViews()
+        liftedAdapter = null
     }
 
-
-    // ==================== 移入文件夹模式 ====================
-
-    private fun enterFolderMode() {
-        speedDialAdapter.enterFolderMode()
-        binding.tvMoveMode.text = "移入文件夹模式 — 长按图标拖到另一个图标上松手，点击空白退出"
-        binding.tvMoveMode.visibility = View.VISIBLE
-        Toast.makeText(this, "已进入移入文件夹模式", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun exitFolderMode() {
-        speedDialAdapter.exitFolderMode()
-        // 文件夹内部的同步移动模式也一起退出
-        if (::folderAdapter.isInitialized) folderAdapter.exitMoveMode()
-        binding.tvMoveMode.visibility = View.GONE
-    }
+    private fun dpToPx(dp: Int): Int = (dp * resources.displayMetrics.density).toInt()
 
     private fun refreshSpeedDialIcons() {
         lifecycleScope.launch {
@@ -1552,8 +1532,7 @@ class MainActivity : AppCompatActivity() {
         isShowingWebView = true
         binding.webViewContainer.visibility = View.VISIBLE
         binding.speedDialContainer.visibility = View.GONE
-        if (speedDialAdapter.moveMode) exitMoveMode()
-        if (speedDialAdapter.folderMode) exitFolderMode()
+        if (speedDialAdapter.hasLifted()) speedDialAdapter.clearLift()
         hideTabOverlay()
     }
 
@@ -1996,13 +1975,14 @@ class MainActivity : AppCompatActivity() {
         }
         if (binding.findBar.visibility == View.VISIBLE) {
             hideFindBar()
+        } else if (binding.liftMenuOverlay.visibility == View.VISIBLE) {
+            // 优先关闭提起菜单
+            liftedAdapter?.clearLift() ?: hideLiftMenuView()
         } else if (binding.folderOverlay.visibility == View.VISIBLE) {
-            // 优先关闭文件夹弹层（外层 moveMode / folderMode 保持，返回主页后仍可继续操作）
+            // 优先关闭文件夹弹层
             closeFolderOverlay()
-        } else if (speedDialAdapter.moveMode) {
-            exitMoveMode()
-        } else if (speedDialAdapter.folderMode) {
-            exitFolderMode()
+        } else if (speedDialAdapter.hasLifted()) {
+            speedDialAdapter.clearLift()
         } else if (speedDialAdapter.batchDeleteMode) {
             speedDialAdapter.exitBatchDeleteMode()
         } else if (binding.tabOverlay.visibility == View.VISIBLE) {

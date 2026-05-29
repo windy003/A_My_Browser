@@ -29,14 +29,6 @@
         android:icon="@drawable/ic_search"
         android:title="搜索网页" />
     <item
-        android:id="@+id/action_move_mode"
-        android:icon="@drawable/ic_move"
-        android:title="移动模式" />
-    <item
-        android:id="@+id/action_move_to_folder"
-        android:icon="@drawable/ic_folder"
-        android:title="移入文件夹" />
-    <item
         android:id="@+id/action_batch_delete"
         android:icon="@drawable/ic_delete"
         android:title="批量删除" />

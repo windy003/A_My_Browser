@@ -152,6 +152,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:background="@color/speed_dial_bg"
+                android:clipChildren="false"
+                android:clipToPadding="false"
                 android:orientation="vertical"
                 android:padding="16dp">
 
@@ -160,6 +162,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"
+                android:clipChildren="false"
                 android:clipToPadding="false"
                 android:paddingBottom="72dp" />
 
@@ -172,17 +175,6 @@
                 android:text="@string/no_speed_dials"
                 android:textColor="@color/gray_medium"
                 android:textSize="16sp"
-                android:visibility="gone" />
-
-            <TextView
-                android:id="@+id/tvMoveMode"
-                android:layout_width="match_parent"
-                android:layout_height="40dp"
-                android:background="@color/primary"
-                android:gravity="center"
-                android:text="移动模式 — 长按拖拽图标排序，点击空白区域退出"
-                android:textColor="@color/white"
-                android:textSize="13sp"
                 android:visibility="gone" />
 
         </LinearLayout>
@@ -208,6 +200,8 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
                     android:orientation="vertical"
                     android:padding="16dp">
 
@@ -225,6 +219,7 @@
                         android:id="@+id/rvFolderItems"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:clipChildren="false"
                         android:clipToPadding="false" />
 
                 </LinearLayout>
@@ -353,5 +348,32 @@
     android:layout_height="match_parent"
     android:background="@android:color/black"
     android:visibility="gone" />
+
+<!-- 长按提起后的操作菜单浮层（覆盖在最上层，点击空白处关闭） -->
+<FrameLayout
+    android:id="@+id/liftMenuOverlay"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:visibility="gone">
+
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/liftMenuCard"
+        android:layout_width="200dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        app:cardBackgroundColor="@color/card_background"
+        app:cardCornerRadius="14dp"
+        app:cardElevation="12dp">
+
+        <LinearLayout
+            android:id="@+id/liftMenuContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="6dp" />
+
+    </com.google.android.material.card.MaterialCardView>
+
+</FrameLayout>
 
 </FrameLayout>
