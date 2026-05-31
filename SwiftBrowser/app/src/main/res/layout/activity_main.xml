@@ -278,8 +278,8 @@
 
     </FrameLayout>
 
-    <!-- 底部导航栏 -->
-    <LinearLayout
+    <!-- 底部导航栏（支持左右滑动切换标签） -->
+    <com.swiftbrowser.ui.browser.SwipeNavBar
         android:id="@+id/bottomBar"
         android:layout_width="match_parent"
         android:layout_height="48dp"
@@ -337,7 +337,7 @@
             android:contentDescription="主页"
             android:src="@drawable/ic_home" />
 
-    </LinearLayout>
+    </com.swiftbrowser.ui.browser.SwipeNavBar>
 
 </LinearLayout>
 

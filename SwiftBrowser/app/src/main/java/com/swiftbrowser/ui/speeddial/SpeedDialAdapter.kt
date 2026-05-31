@@ -45,7 +45,7 @@ class SpeedDialAdapter(
         private const val PAYLOAD_LIFT = "lift"
 
         /** 长按提起所需时长（毫秒）。用户要求约 2 秒，集中成常量便于调整。 */
-        private const val LIFT_LONG_PRESS_MS = 2000L
+        private const val LIFT_LONG_PRESS_MS = 1000L
     }
 
     /** 触摸移动判定阈值，首次创建 ViewHolder 时初始化 */

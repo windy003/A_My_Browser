@@ -1227,6 +1227,21 @@ class MainActivity : AppCompatActivity() {
         binding.btnHome.setOnClickListener { showHomePage() }
 
         binding.btnTabs.setOnClickListener { toggleTabOverlay() }
+
+        // 在底部工具栏左右滑动切换标签：左滑→下一个，右滑→上一个
+        binding.bottomBar.onSwipeLeft = { switchToAdjacentTab(forward = true) }
+        binding.bottomBar.onSwipeRight = { switchToAdjacentTab(forward = false) }
+    }
+
+    /** 切换到相邻标签；到达两端不循环。 */
+    private fun switchToAdjacentTab(forward: Boolean) {
+        if (tabs.size <= 1) return
+        val current = activeTab ?: return
+        val index = tabs.indexOf(current)
+        if (index < 0) return
+        val newIndex = if (forward) index + 1 else index - 1
+        if (newIndex < 0 || newIndex >= tabs.size) return
+        switchToTab(tabs[newIndex])
     }
 
     // ==================== 菜单 ====================
