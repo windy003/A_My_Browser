@@ -1226,6 +1226,9 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnHome.setOnClickListener { showHomePage() }
 
+        // 底部新建标签按钮：新建一个标签页并显示主页
+        binding.btnNewTabBottom.setOnClickListener { createNewTab() }
+
         binding.btnTabs.setOnClickListener { toggleTabOverlay() }
 
         // 长按标签按钮超过 2 秒：关闭当前标签页（并抑制随后的单击，避免误打开标签浮层）
