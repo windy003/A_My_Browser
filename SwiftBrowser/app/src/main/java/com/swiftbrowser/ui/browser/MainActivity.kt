@@ -1253,7 +1253,11 @@ class MainActivity : AppCompatActivity() {
         var longPressFired = false
         val closeRunnable = Runnable {
             longPressFired = true
-            activeTab?.let { closeTab(it) }
+            val tab = activeTab
+            if (tab != null) {
+                closeTab(tab)
+                Toast.makeText(this, "已关闭标签页（剩 ${tabs.size} 个）", Toast.LENGTH_SHORT).show()
+            }
         }
         binding.btnTabs.setOnTouchListener { v, event ->
             when (event.actionMasked) {
