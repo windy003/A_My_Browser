@@ -1228,6 +1228,9 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnTabs.setOnClickListener { toggleTabOverlay() }
 
+        // 长按标签按钮超过 2 秒：关闭当前标签页（并抑制随后的单击，避免误打开标签浮层）
+        setupTabsLongPress()
+
         // 在底部工具栏左右滑动切换标签：左滑→下一个，右滑→上一个
         binding.bottomBar.onSwipeLeft = { switchToAdjacentTab(forward = true) }
         binding.bottomBar.onSwipeRight = { switchToAdjacentTab(forward = false) }
@@ -1242,6 +1245,44 @@ class MainActivity : AppCompatActivity() {
         val newIndex = if (forward) index + 1 else index - 1
         if (newIndex < 0 || newIndex >= tabs.size) return
         switchToTab(tabs[newIndex])
+    }
+
+    /** 长按标签按钮超过 2 秒时关闭当前标签页。 */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupTabsLongPress() {
+        var longPressFired = false
+        val closeRunnable = Runnable {
+            longPressFired = true
+            activeTab?.let { closeTab(it) }
+        }
+        binding.btnTabs.setOnTouchListener { v, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    longPressFired = false
+                    v.postDelayed(closeRunnable, 2000L)
+                    false
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    // 手指移出按钮范围时取消长按
+                    if (event.x < 0 || event.y < 0 ||
+                        event.x > v.width || event.y > v.height
+                    ) {
+                        v.removeCallbacks(closeRunnable)
+                    }
+                    false
+                }
+                MotionEvent.ACTION_UP -> {
+                    v.removeCallbacks(closeRunnable)
+                    // 长按已触发关闭时，消费抬起事件以抑制随后的单击
+                    longPressFired
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    v.removeCallbacks(closeRunnable)
+                    false
+                }
+                else -> false
+            }
+        }
     }
 
     // ==================== 菜单 ====================
