@@ -11,6 +11,7 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Rect
 import android.net.Uri
 import android.content.Context
 import android.content.SharedPreferences
@@ -21,7 +22,10 @@ import android.view.KeyEvent
 import android.widget.SeekBar
 import android.widget.TextView
 import java.io.File
+import android.view.ActionMode
 import android.view.DragEvent
+import android.view.Menu
+import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
@@ -89,6 +93,11 @@ class MainActivity : AppCompatActivity() {
         set(value) { prefs.edit().putBoolean("t2s_enabled", value).apply() }
     // 缓存的转换 JS（包含字典）；首次需要时从 assets 加载
     private var t2sScriptCache: String? = null
+
+    companion object {
+        private const val MENU_ID_YOUDAO = 0x59440001
+        private const val YOUDAO_PACKAGE = "com.youdao.dict"
+    }
 
     // ==================== 多标签 ====================
     private val tabs = mutableListOf<Tab>()
@@ -358,7 +367,7 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(): WebView {
-        return WebView(this).apply {
+        return SelectionWebView(this).apply {
             // 允许第三方 Cookie（Google 登录需要跨域 Cookie）
             val cookieManager = android.webkit.CookieManager.getInstance()
             cookieManager.setAcceptThirdPartyCookies(this, true)
@@ -680,6 +689,109 @@ class MainActivity : AppCompatActivity() {
                 showDownloadConfirmDialog(url, contentDisposition, mimeType, fileName)
             }
 
+        }
+    }
+
+    // 继承 WebView 以定制文字选择菜单：把"有道翻译"挪到"复制"紧后面
+    private inner class SelectionWebView(context: Context) : WebView(context) {
+        override fun startActionMode(callback: ActionMode.Callback?): ActionMode? =
+            super.startActionMode(wrapCallback(callback))
+
+        override fun startActionMode(callback: ActionMode.Callback?, type: Int): ActionMode? =
+            super.startActionMode(wrapCallback(callback), type)
+
+        // 用 Callback2 包装：文字选择是浮动工具栏(TYPE_FLOATING)，
+        // 必须转发 onGetContentRect 才能浮在选中文字旁，否则会退化成屏幕底部的栏
+        private fun wrapCallback(callback: ActionMode.Callback?): ActionMode.Callback =
+            object : ActionMode.Callback2() {
+                override fun onCreateActionMode(mode: ActionMode?, menu: Menu?): Boolean =
+                    callback?.onCreateActionMode(mode, menu) ?: true
+
+                override fun onPrepareActionMode(mode: ActionMode?, menu: Menu?): Boolean {
+                    // 先让 WebView 填充默认项（含异步加入的 PROCESS_TEXT 项）
+                    callback?.onPrepareActionMode(mode, menu)
+                    if (menu != null) customizeMenu(menu)
+                    return true
+                }
+
+                override fun onActionItemClicked(mode: ActionMode?, item: MenuItem?): Boolean {
+                    if (item?.itemId == MENU_ID_YOUDAO) {
+                        evaluateJavascript("(function(){return window.getSelection().toString();})();") { value ->
+                            val word = decodeJsString(value)
+                            if (word.isNotBlank()) openYoudaoDict(word)
+                        }
+                        mode?.finish()
+                        return true
+                    }
+                    return callback?.onActionItemClicked(mode, item) ?: false
+                }
+
+                override fun onDestroyActionMode(mode: ActionMode?) {
+                    callback?.onDestroyActionMode(mode)
+                }
+
+                override fun onGetContentRect(mode: ActionMode?, view: View?, outRect: Rect?) {
+                    val cb2 = callback as? ActionMode.Callback2
+                    if (cb2 != null) {
+                        cb2.onGetContentRect(mode, view, outRect)
+                    } else {
+                        super.onGetContentRect(mode, view, outRect)
+                    }
+                }
+            }
+
+        // 移除系统自动加到末尾的有道项，并在"复制"后面插入自定义的"有道翻译"
+        private fun customizeMenu(menu: Menu) {
+            // 1. 移除 WebView 自动添加的有道 PROCESS_TEXT 项（避免重复）
+            for (i in menu.size() - 1 downTo 0) {
+                val item = menu.getItem(i)
+                if (item.itemId == MENU_ID_YOUDAO) continue
+                val pkg = item.intent?.`package` ?: item.intent?.component?.packageName
+                val isYoudao = pkg == YOUDAO_PACKAGE || (item.title?.contains("有道") == true)
+                if (isYoudao) menu.removeItem(item.itemId)
+            }
+            // 2. 在"复制"紧后面插入自定义项（order 与复制相同，后插入即排在其后）
+            if (menu.findItem(MENU_ID_YOUDAO) == null) {
+                val copyTitle = getString(android.R.string.copy)
+                var order = 2 // 复制的默认 order
+                for (i in 0 until menu.size()) {
+                    if (menu.getItem(i).title?.toString() == copyTitle) {
+                        order = menu.getItem(i).order
+                        break
+                    }
+                }
+                menu.add(0, MENU_ID_YOUDAO, order, "有道翻译")
+                    .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+            }
+        }
+    }
+
+    // evaluateJavascript 返回的是 JSON 编码的字符串，解码为原始文本
+    private fun decodeJsString(value: String?): String {
+        if (value == null || value == "null") return ""
+        return try {
+            org.json.JSONArray("[$value]").getString(0)
+        } catch (_: Exception) {
+            value.trim('"')
+        }
+    }
+
+    // 调用有道词典 App 查询选中的文字（标准 PROCESS_TEXT 划词机制）
+    private fun openYoudaoDict(word: String) {
+        val intent = Intent(Intent.ACTION_PROCESS_TEXT).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_PROCESS_TEXT, word.trim())
+            putExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, true)
+            setPackage(YOUDAO_PACKAGE)
+        }
+        try {
+            startActivity(intent)
+        } catch (_: android.content.ActivityNotFoundException) {
+            Toast.makeText(this, "未安装有道词典 App", Toast.LENGTH_SHORT).show()
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW,
+                    Uri.parse("market://details?id=$YOUDAO_PACKAGE")))
+            } catch (_: android.content.ActivityNotFoundException) { }
         }
     }
 
