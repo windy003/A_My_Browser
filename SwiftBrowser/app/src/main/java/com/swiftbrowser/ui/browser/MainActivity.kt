@@ -1409,6 +1409,13 @@ class MainActivity : AppCompatActivity() {
     // ==================== 菜单 ====================
 
     private fun setupMenuButton() {
+        binding.btnRefresh.setOnClickListener {
+            if (isShowingWebView) {
+                activeTab?.webView?.reload()
+            } else {
+                refreshSpeedDialIcons()
+            }
+        }
         binding.btnMore.setOnClickListener { view ->
             val popup = PopupMenu(this, view)
             popup.menuInflater.inflate(R.menu.main_menu, popup.menu)
@@ -1430,14 +1437,6 @@ class MainActivity : AppCompatActivity() {
                             showFindBar()
                         } else {
                             Toast.makeText(this, "请先浏览一个网页", Toast.LENGTH_SHORT).show()
-                        }
-                        true
-                    }
-                    R.id.action_refresh -> {
-                        if (isShowingWebView) {
-                            activeTab?.webView?.reload()
-                        } else {
-                            refreshSpeedDialIcons()
                         }
                         true
                     }

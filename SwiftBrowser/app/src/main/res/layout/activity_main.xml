@@ -49,6 +49,16 @@
                 android:textSize="14sp" />
 
             <ImageButton
+                android:id="@+id/btnRefresh"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="刷新"
+                android:src="@drawable/ic_refresh"
+                app:tint="@color/white" />
+
+            <ImageButton
                 android:id="@+id/btnMore"
                 android:layout_width="36dp"
                 android:layout_height="36dp"
