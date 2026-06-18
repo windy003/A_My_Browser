@@ -328,13 +328,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="24dp"
                 android:layout_gravity="center"
-                android:minWidth="24dp"
-                android:paddingHorizontal="4dp"
-                android:background="@drawable/bg_tab_count_bottom"
                 android:gravity="center"
                 android:text="1/1"
                 android:textColor="@color/text_primary"
-                android:textSize="12sp"
+                android:textSize="14sp"
                 android:textStyle="bold" />
 
         </FrameLayout>
