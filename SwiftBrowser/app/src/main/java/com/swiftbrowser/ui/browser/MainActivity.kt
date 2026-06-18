@@ -210,6 +210,7 @@ class MainActivity : AppCompatActivity() {
         captureCurrentTabThumbnail()
 
         activeTab = tab
+        updateTabCount()
 
         // 切换 WebView 显示
         binding.webViewContainer.removeAllViews()
@@ -278,7 +279,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateTabCount() {
-        binding.tvTabCountBottom.text = tabs.size.toString()
+        val current = tabs.indexOf(activeTab) + 1
+        binding.tvTabCountBottom.text = if (current > 0) "$current/${tabs.size}" else tabs.size.toString()
     }
 
     // ==================== 标签管理界面 ====================
