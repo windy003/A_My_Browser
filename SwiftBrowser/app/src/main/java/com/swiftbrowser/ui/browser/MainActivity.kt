@@ -150,6 +150,38 @@ class MainActivity : AppCompatActivity() {
         fileChooserCallback = null
     }
 
+    // 保存为 MHTML：先存到临时文件，再让用户选择保存位置后写入
+    private var pendingMhtmlTempFile: java.io.File? = null
+    private val saveMhtmlLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val temp = pendingMhtmlTempFile
+        pendingMhtmlTempFile = null
+        if (result.resultCode == RESULT_OK && temp != null) {
+            val uri = result.data?.data
+            if (uri != null) {
+                try {
+                    contentResolver.openOutputStream(uri)?.use { out ->
+                        temp.inputStream().use { it.copyTo(out) }
+                    }
+                    Toast.makeText(this, "已保存为 MHTML", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(this, "保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        temp?.delete()
+    }
+
+    // 打开 MHTML：选择文件后复制到缓存目录并用 WebView 加载
+    private val openMhtmlLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            result.data?.data?.let { openMhtmlFromUri(it) }
+        }
+    }
+
     override fun attachBaseContext(newBase: android.content.Context?) {
         val config = android.content.res.Configuration(newBase?.resources?.configuration)
         config.fontScale = 1.0f
@@ -384,6 +416,8 @@ class MainActivity : AppCompatActivity() {
             settings.mediaPlaybackRequiresUserGesture = false
             settings.databaseEnabled = true
             settings.cacheMode = WebSettings.LOAD_DEFAULT
+            // 允许加载本地文件（用于打开 MHTML 离线网页）
+            settings.allowFileAccess = true
             // 防止 WebView 字体跟随系统字体缩放
             settings.textZoom = 100
 
@@ -1440,6 +1474,14 @@ class MainActivity : AppCompatActivity() {
                         }
                         true
                     }
+                    R.id.action_save_mhtml -> {
+                        saveCurrentPageAsMhtml()
+                        true
+                    }
+                    R.id.action_open_mhtml -> {
+                        openMhtmlFile()
+                        true
+                    }
                     R.id.action_bookmarks -> {
                         startActivity(Intent(this, BookmarkActivity::class.java))
                         true
@@ -1702,6 +1744,74 @@ class MainActivity : AppCompatActivity() {
         if (url.isEmpty()) return
         showWebView()
         activeTab?.webView?.loadUrl(url)
+    }
+
+    // ==================== MHTML 保存 / 打开 ====================
+
+    /** 将当前网页保存为 MHTML 文件 */
+    private fun saveCurrentPageAsMhtml() {
+        val webView = activeTab?.webView
+        if (!isShowingWebView || webView == null || currentUrl == null) {
+            Toast.makeText(this, "请先浏览一个网页", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val tempFile = java.io.File(cacheDir, "mhtml_${System.currentTimeMillis()}.mhtml")
+        webView.saveWebArchive(tempFile.absolutePath, false) { resultPath ->
+            runOnUiThread {
+                if (resultPath == null) {
+                    Toast.makeText(this, "保存失败", Toast.LENGTH_SHORT).show()
+                    tempFile.delete()
+                    return@runOnUiThread
+                }
+                pendingMhtmlTempFile = tempFile
+                val baseName = (currentTitle?.takeIf { it.isNotBlank() } ?: "webpage")
+                    .replace(Regex("[\\\\/:*?\"<>|\\r\\n\\t]"), "_")
+                    .take(100)
+                val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "multipart/related"
+                    putExtra(Intent.EXTRA_TITLE, "$baseName.mhtml")
+                }
+                try {
+                    saveMhtmlLauncher.launch(intent)
+                } catch (e: Exception) {
+                    pendingMhtmlTempFile = null
+                    tempFile.delete()
+                    Toast.makeText(this, "无法打开保存对话框", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    /** 选择并打开一个 MHTML 文件 */
+    private fun openMhtmlFile() {
+        // 不限制 MIME 类型：很多设备把 .mhtml 识别为 application/octet-stream，
+        // 加白名单会导致这些文件变灰不可选，所以这里允许选择任意文件
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        try {
+            openMhtmlLauncher.launch(intent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "无法打开文件选择器", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openMhtmlFromUri(uri: Uri) {
+        try {
+            val tempFile = java.io.File(cacheDir, "open_${System.currentTimeMillis()}.mht")
+            contentResolver.openInputStream(uri)?.use { input ->
+                tempFile.outputStream().use { input.copyTo(it) }
+            } ?: run {
+                Toast.makeText(this, "无法读取文件", Toast.LENGTH_SHORT).show()
+                return
+            }
+            showWebView()
+            activeTab?.webView?.loadUrl("file://${tempFile.absolutePath}")
+        } catch (e: Exception) {
+            Toast.makeText(this, "打开失败: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun showWebView() {
