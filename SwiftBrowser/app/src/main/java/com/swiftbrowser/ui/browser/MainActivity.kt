@@ -1380,7 +1380,7 @@ class MainActivity : AppCompatActivity() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     longPressFired = false
-                    v.postDelayed(closeRunnable, 2000L)
+                    v.postDelayed(closeRunnable, 1000L)
                     false
                 }
                 MotionEvent.ACTION_MOVE -> {
