@@ -94,6 +94,15 @@ class MainActivity : AppCompatActivity() {
     // 缓存的转换 JS（包含字典）；首次需要时从 assets 加载
     private var t2sScriptCache: String? = null
 
+    // 桌面模式：使用桌面版 User-Agent 并以宽视口渲染
+    private var desktopModeEnabled: Boolean
+        get() = prefs.getBoolean("desktop_mode_enabled", false)
+        set(value) { prefs.edit().putBoolean("desktop_mode_enabled", value).apply() }
+    // 缓存的移动版（默认）User-Agent，用于在桌面/普通模式间切换
+    private val mobileUserAgent: String by lazy {
+        WebSettings.getDefaultUserAgent(this).replace("; wv", "")
+    }
+
     companion object {
         private const val MENU_ID_YOUDAO = 0x59440001
         private const val YOUDAO_PACKAGE = "com.youdao.dict"
@@ -422,7 +431,8 @@ class MainActivity : AppCompatActivity() {
             settings.textZoom = 100
 
             // 伪装成普通浏览器，避免 Google 拒绝 WebView 中的 OAuth 登录
-            settings.userAgentString = settings.userAgentString.replace("; wv", "")
+            // 同时根据当前是否为桌面模式设置 User-Agent
+            applyDesktopMode(this, desktopModeEnabled)
 
             // 暗黑模式：让网页内容也跟随系统暗色主题
             if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
@@ -1464,6 +1474,9 @@ class MainActivity : AppCompatActivity() {
             val t2sToggleItem = popup.menu.findItem(R.id.action_t2s_toggle)
             t2sToggleItem.title = "繁转简:" + if (t2sEnabled) "开" else "关"
 
+            val desktopModeItem = popup.menu.findItem(R.id.action_desktop_mode_toggle)
+            desktopModeItem.title = "桌面模式:" + if (desktopModeEnabled) "开" else "关"
+
             popup.setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     R.id.action_find_in_page -> {
@@ -1542,6 +1555,22 @@ class MainActivity : AppCompatActivity() {
                         } else {
                             // 关闭时重新加载当前页以恢复原文
                             activeTab?.webView?.reload()
+                        }
+                        true
+                    }
+                    R.id.action_desktop_mode_toggle -> {
+                        desktopModeEnabled = !desktopModeEnabled
+                        Toast.makeText(
+                            this,
+                            "桌面模式已" + if (desktopModeEnabled) "开启" else "关闭",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        // 对所有标签页应用新模式并重新加载，使布局生效
+                        for (tab in tabs) {
+                            tab.webView?.let { webView ->
+                                applyDesktopMode(webView, desktopModeEnabled)
+                                webView.reload()
+                            }
                         }
                         true
                     }
@@ -1640,6 +1669,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ==================== 繁转简 ====================
+
+    /**
+     * 对指定 WebView 应用桌面模式或普通模式。
+     * 桌面模式：使用桌面版 User-Agent，并以宽视口渲染（让网站返回桌面布局）。
+     * 普通模式：恢复移动版 User-Agent。
+     */
+    private fun applyDesktopMode(webView: WebView, enabled: Boolean) {
+        val settings = webView.settings
+        if (enabled) {
+            // 将移动版 UA 转换为桌面版：替换平台标识并去掉 "Mobile"
+            var ua = mobileUserAgent.replace(
+                Regex("\\(Linux; Android.*?\\)"), "(X11; Linux x86_64)"
+            )
+            ua = ua.replace(Regex("\\s*Mobile\\s*"), " ").trim()
+            settings.userAgentString = ua
+        } else {
+            settings.userAgentString = mobileUserAgent
+        }
+        // 两种模式都保持宽视口与缩略概览，确保页面正确适配
+        settings.useWideViewPort = true
+        settings.loadWithOverviewMode = true
+    }
 
     private fun applyT2S(webView: WebView) {
         val script = t2sScriptCache ?: buildT2SScript().also { t2sScriptCache = it }

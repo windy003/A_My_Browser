@@ -49,6 +49,10 @@
         android:icon="@drawable/ic_refresh"
         android:title="繁转简:关" />
     <item
+        android:id="@+id/action_desktop_mode_toggle"
+        android:icon="@drawable/ic_search"
+        android:title="桌面模式:关" />
+    <item
         android:id="@+id/action_login"
         android:icon="@drawable/ic_person"
         android:title="@string/sign_in" />
