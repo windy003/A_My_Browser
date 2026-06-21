@@ -54,6 +54,11 @@
     <string name="download_confirm">下载文件</string>
     <string name="download_confirm_message">是否下载 \"%s\"？</string>
     <string name="download_started">开始下载：%s</string>
+    <string name="download_complete">下载完成：%s</string>
+    <string name="download_failed">下载失败：%s</string>
     <string name="download_need_permission">需要存储权限才能下载文件</string>
     <string name="file_chooser_unavailable">无法打开文件选择器</string>
+    <string name="download_image">下载图片</string>
+    <string name="image_saved">图片已保存：%s</string>
+    <string name="image_save_failed">图片保存失败</string>
 </resources>

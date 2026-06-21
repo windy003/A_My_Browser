@@ -129,6 +129,27 @@ class MainActivity : AppCompatActivity() {
     // 下载
     private var pendingDownload: PendingDownload? = null
     private data class PendingDownload(val url: String, val contentDisposition: String?, val mimeType: String?, val fileName: String)
+
+    // 记录通过 DownloadManager 发起的下载，用于在完成时提示
+    private val pendingDownloadIds = mutableSetOf<Long>()
+    private val downloadCompleteReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) ?: -1L
+            if (id == -1L || !pendingDownloadIds.remove(id)) return
+            val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+            dm.query(DownloadManager.Query().setFilterById(id)).use { cursor ->
+                if (!cursor.moveToFirst()) return
+                val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                val title = cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TITLE)) ?: ""
+                when (status) {
+                    DownloadManager.STATUS_SUCCESSFUL ->
+                        Toast.makeText(this@MainActivity, getString(R.string.download_complete, title), Toast.LENGTH_SHORT).show()
+                    DownloadManager.STATUS_FAILED ->
+                        Toast.makeText(this@MainActivity, getString(R.string.download_failed, title), Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
     private val storagePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -213,6 +234,15 @@ class MainActivity : AppCompatActivity() {
         // 创建第一个标签
         createNewTab()
 
+        // 监听下载完成，用于弹出"下载完成"提示
+        val downloadFilter = android.content.IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(downloadCompleteReceiver, downloadFilter, Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(downloadCompleteReceiver, downloadFilter)
+        }
+
         handleIntent(intent)
     }
 
@@ -221,6 +251,9 @@ class MainActivity : AppCompatActivity() {
         for (tab in tabs) {
             tab.webView?.destroy()
         }
+        try {
+            unregisterReceiver(downloadCompleteReceiver)
+        } catch (_: Exception) { }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -735,6 +768,87 @@ class MainActivity : AppCompatActivity() {
                 showDownloadConfirmDialog(url, contentDisposition, mimeType, fileName)
             }
 
+            // 长按图片：弹出"下载图片"菜单
+            setOnLongClickListener { v ->
+                val webView = v as? WebView ?: return@setOnLongClickListener false
+                val result = webView.hitTestResult
+                val type = result.type
+                if (type == WebView.HitTestResult.IMAGE_TYPE ||
+                    type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) {
+                    val imageUrl = result.extra
+                    if (!imageUrl.isNullOrBlank()) {
+                        showImageLongPressMenu(imageUrl)
+                        return@setOnLongClickListener true
+                    }
+                }
+                false
+            }
+
+        }
+    }
+
+    // ==================== 长按图片下载 ====================
+
+    private fun showImageLongPressMenu(imageUrl: String) {
+        AlertDialog.Builder(this)
+            .setItems(arrayOf(getString(R.string.download_image))) { _, _ ->
+                downloadImage(imageUrl)
+            }
+            .show()
+    }
+
+    private fun downloadImage(imageUrl: String) {
+        if (imageUrl.startsWith("data:")) {
+            // base64 内联图片，DownloadManager 无法处理，直接解码保存
+            saveDataUriImage(imageUrl)
+            return
+        }
+        // http/https 图片走统一的下载流程（含权限处理）
+        val fileName = URLUtil.guessFileName(imageUrl, null, null)
+        requestDownload(imageUrl, null, null, fileName)
+    }
+
+    // 保存 data:URI 形式的内联图片到下载目录
+    private fun saveDataUriImage(dataUri: String) {
+        try {
+            val commaIndex = dataUri.indexOf(',')
+            if (commaIndex < 0) throw IllegalArgumentException("invalid data uri")
+            val header = dataUri.substring(5, commaIndex) // 去掉开头的 "data:"
+            val mimeType = header.substringBefore(';').ifBlank { "image/*" }
+            val isBase64 = header.contains("base64")
+            val dataPart = dataUri.substring(commaIndex + 1)
+            val bytes = if (isBase64) {
+                android.util.Base64.decode(dataPart, android.util.Base64.DEFAULT)
+            } else {
+                Uri.decode(dataPart).toByteArray()
+            }
+
+            val ext = when {
+                mimeType.contains("png") -> "png"
+                mimeType.contains("gif") -> "gif"
+                mimeType.contains("webp") -> "webp"
+                mimeType.contains("jpeg") || mimeType.contains("jpg") -> "jpg"
+                else -> "img"
+            }
+            val fileName = getUniqueFileName("image_${System.currentTimeMillis()}.$ext")
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(android.provider.MediaStore.Downloads.MIME_TYPE, mimeType)
+                    put(android.provider.MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                }
+                val uri = contentResolver.insert(
+                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                ) ?: throw IllegalStateException("insert failed")
+                contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+            } else {
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                File(downloadsDir, fileName).outputStream().use { it.write(bytes) }
+            }
+            Toast.makeText(this, getString(R.string.image_saved, fileName), Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, R.string.image_save_failed, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -880,7 +994,8 @@ class MainActivity : AppCompatActivity() {
             setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, actualFileName)
         }
         val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-        dm.enqueue(request)
+        val downloadId = dm.enqueue(request)
+        pendingDownloadIds.add(downloadId)
         // 保存下载记录（用实际文件名）
         lifecycleScope.launch {
             app.database.downloadRecordDao().insert(
