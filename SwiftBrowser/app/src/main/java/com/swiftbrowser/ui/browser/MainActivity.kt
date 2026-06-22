@@ -36,7 +36,9 @@ import android.webkit.*
 import android.widget.LinearLayout
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.webkit.ScriptHandler
 import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import android.widget.EditText
 import android.widget.PopupMenu
@@ -102,10 +104,54 @@ class MainActivity : AppCompatActivity() {
     private val mobileUserAgent: String by lazy {
         WebSettings.getDefaultUserAgent(this).replace("; wv", "")
     }
+    // 桌面模式下为各 WebView 注册的 document-start 脚本句柄，用于关闭时移除
+    private val desktopScripts = HashMap<WebView, ScriptHandler>()
+    // 把网页 viewport 宽度强制为桌面宽度的脚本（渲染前注入）
+    private val desktopViewportScript: String by lazy {
+        """
+        (function() {
+            var DESIRED = 'width=$DESKTOP_WIDTH_PX';
+            function setViewport() {
+                // 强制页面里「所有」viewport meta 都用桌面宽度——
+                // 浏览器对多个 viewport meta 取最后生效，必须全部覆盖才能压过网站自带的
+                // width=device-width（否则会被它压回手机布局）。
+                var metas = document.querySelectorAll('meta[name="viewport"]');
+                if (metas.length === 0) {
+                    var head = document.head || document.getElementsByTagName('head')[0] || document.documentElement;
+                    if (!head) return;
+                    var m = document.createElement('meta');
+                    m.setAttribute('name', 'viewport');
+                    m.setAttribute('content', DESIRED);
+                    head.appendChild(m);
+                    return;
+                }
+                for (var i = 0; i < metas.length; i++) {
+                    if (metas[i].getAttribute('content') !== DESIRED) {
+                        metas[i].setAttribute('content', DESIRED);
+                    }
+                }
+            }
+            setViewport();
+            document.addEventListener('DOMContentLoaded', setViewport);
+            window.addEventListener('load', setViewport);
+            // GitHub 等 SPA(Turbo) 会在加载后或站内跳转时插入/重置 viewport，
+            // 用 MutationObserver 持续纠正。内容已是目标值时不再写入，不会死循环。
+            try {
+                new MutationObserver(setViewport).observe(
+                    document.documentElement, { childList: true, subtree: true }
+                );
+            } catch (e) {}
+        })();
+        """.trimIndent()
+    }
 
     companion object {
         private const val MENU_ID_YOUDAO = 0x59440001
         private const val YOUDAO_PACKAGE = "com.youdao.dict"
+        // 桌面模式下强制的页面布局宽度（CSS px），用于命中网站的桌面版断点。
+        // 取 1024 是为了越过常见桌面断点（如 GitHub/Primer 的 lg=1012px），
+        // 否则视口虽变宽但仍落在「平板/窄版」区间，显示不出完整桌面布局。
+        private const val DESKTOP_WIDTH_PX = 1024
     }
 
     // ==================== 多标签 ====================
@@ -324,6 +370,7 @@ class MainActivity : AppCompatActivity() {
         val index = tabs.indexOf(tab)
         tabs.remove(tab)
         binding.webViewContainer.removeView(tab.webView)
+        tab.webView?.let { desktopScripts.remove(it) }
         tab.webView?.destroy()
 
         if (tab == activeTab) {
@@ -479,6 +526,12 @@ class MainActivity : AppCompatActivity() {
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                     super.onPageStarted(view, url, favicon)
+                    // 桌面模式视口注入的回退路径：设备不支持 DOCUMENT_START_SCRIPT 时，
+                    // 在页面开始加载时尽早注入（可能有轻微闪烁，但能命中桌面布局）。
+                    if (desktopModeEnabled && view != null &&
+                        !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                        view.evaluateJavascript(desktopViewportScript, null)
+                    }
                     val tab = findTabByWebView(view) ?: return
                     tab.url = url
                     if (tab == activeTab) {
@@ -1845,12 +1898,41 @@ class MainActivity : AppCompatActivity() {
             )
             ua = ua.replace(Regex("\\s*Mobile\\s*"), " ").trim()
             settings.userAgentString = ua
+
+            // 仅改 UA 对 GitHub 这类「响应式」网站无效——它们不看 UA，只看视口宽度，
+            // 用 CSS @media 断点决定显示手机版还是桌面版布局。
+            // 这里把网页声明的 viewport 宽度强制改成 DESKTOP_WIDTH_PX（桌面宽度），
+            // 让网页的 @media 命中桌面断点。
+            registerDesktopViewport(webView)
+            // 把桌面宽度缩放贴合屏幕，避免桌面布局出来后还要左右拖动。
+            val screenWidthPx = resources.displayMetrics.widthPixels
+            val scale = (screenWidthPx.toDouble() / DESKTOP_WIDTH_PX * 100).toInt()
+            webView.setInitialScale(scale.coerceIn(1, 1000))
         } else {
             settings.userAgentString = mobileUserAgent
+            unregisterDesktopViewport(webView)
+            webView.setInitialScale(0)
         }
         // 两种模式都保持宽视口与缩略概览，确保页面正确适配
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
+    }
+
+    /**
+     * 桌面模式视口注入：用 document-start 脚本在页面渲染前就把
+     * <meta name="viewport"> 的宽度强制成桌面宽度，使响应式网站命中桌面布局。
+     * 优先用 androidx.webkit 的 DOCUMENT_START_SCRIPT（渲染前注入，无闪烁）；
+     * 不支持时退回到 onPageStarted 阶段注入（见 WebViewClient）。
+     */
+    private fun registerDesktopViewport(webView: WebView) {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
+        if (desktopScripts.containsKey(webView)) return
+        desktopScripts[webView] =
+            WebViewCompat.addDocumentStartJavaScript(webView, desktopViewportScript, setOf("*"))
+    }
+
+    private fun unregisterDesktopViewport(webView: WebView) {
+        desktopScripts.remove(webView)?.remove()
     }
 
     private fun applyT2S(webView: WebView) {
