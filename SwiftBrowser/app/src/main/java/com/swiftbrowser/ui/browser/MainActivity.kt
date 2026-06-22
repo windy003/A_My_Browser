@@ -472,6 +472,10 @@ class MainActivity : AppCompatActivity() {
                 WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, true)
             }
 
+            // 原生剪贴板桥接：WebView 默认拒绝 navigator.clipboard.writeText（异步剪贴板 API），
+            // 导致 Claude 等网站的"复制代码"按钮点击无效。通过此桥接把写剪贴板交给原生处理。
+            addJavascriptInterface(ClipboardBridge(), "AndroidClipboard")
+
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                     super.onPageStarted(view, url, favicon)
@@ -531,6 +535,37 @@ class MainActivity : AppCompatActivity() {
                             });
                             // 阻止 window.open 弹窗
                             window.open = function() { return null; };
+                        })();
+                    """.trimIndent(), null)
+
+                    // 注入剪贴板兼容脚本：把 navigator.clipboard.writeText 与
+                    // document.execCommand('copy') 重定向到原生剪贴板，修复 WebView 中
+                    // "复制代码"按钮无效的问题。
+                    view?.evaluateJavascript("""
+                        (function() {
+                            if (!window.AndroidClipboard) return;
+                            function nativeCopy(text) {
+                                try { window.AndroidClipboard.copyToClipboard(String(text)); return true; }
+                                catch (e) { return false; }
+                            }
+                            // 覆盖异步剪贴板 API
+                            try {
+                                var clip = navigator.clipboard || {};
+                                clip.writeText = function(text) {
+                                    return nativeCopy(text) ? Promise.resolve() : Promise.reject(new Error('copy failed'));
+                                };
+                                try { Object.defineProperty(navigator, 'clipboard', { value: clip, configurable: true }); }
+                                catch (e) { navigator.clipboard = clip; }
+                            } catch (e) {}
+                            // 兼容旧的 execCommand('copy')：复制当前选区内容
+                            var _exec = document.execCommand ? document.execCommand.bind(document) : null;
+                            document.execCommand = function(cmd) {
+                                if (cmd && cmd.toLowerCase() === 'copy') {
+                                    var sel = window.getSelection ? String(window.getSelection()) : '';
+                                    if (sel) { nativeCopy(sel); return true; }
+                                }
+                                return _exec ? _exec.apply(document, arguments) : false;
+                            };
                         })();
                     """.trimIndent(), null)
                 }
@@ -849,6 +884,17 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, getString(R.string.image_saved, fileName), Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, R.string.image_save_failed, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // 网页 JS 调用的原生剪贴板桥接，配合注入脚本修复"复制代码"按钮
+    private inner class ClipboardBridge {
+        @android.webkit.JavascriptInterface
+        fun copyToClipboard(text: String) {
+            runOnUiThread {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("text", text))
+            }
         }
     }
 
