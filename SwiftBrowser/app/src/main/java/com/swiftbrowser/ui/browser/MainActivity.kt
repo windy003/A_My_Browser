@@ -27,6 +27,7 @@ import android.view.DragEvent
 import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
+import android.view.ViewConfiguration
 import android.view.View
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
@@ -1603,8 +1604,8 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnTabs.setOnClickListener { toggleTabOverlay() }
 
-        // 长按标签按钮超过 2 秒：关闭当前标签页（并抑制随后的单击，避免误打开标签浮层）
-        setupTabsLongPress()
+        // 在标签按钮上向上滑动：关闭当前标签页（并抑制随后的单击，避免误打开标签浮层）
+        setupTabsSwipeClose()
 
         // 在底部工具栏左右滑动切换标签：左滑→下一个，右滑→上一个
         binding.bottomBar.onSwipeLeft = { switchToAdjacentTab(forward = true) }
@@ -1622,42 +1623,38 @@ class MainActivity : AppCompatActivity() {
         switchToTab(tabs[newIndex])
     }
 
-    /** 长按标签按钮超过 2 秒时关闭当前标签页。 */
+    /**
+     * 标签按钮手势：在按钮上向上滑动关闭当前标签页。
+     * 触发后消费抬起事件，抑制随后的单击（避免误打开标签浮层）。
+     */
     @SuppressLint("ClickableViewAccessibility")
-    private fun setupTabsLongPress() {
-        var longPressFired = false
-        val closeRunnable = Runnable {
-            longPressFired = true
-            val tab = activeTab
-            if (tab != null) {
-                closeTab(tab)
-                Toast.makeText(this, "已关闭标签页（剩 ${tabs.size} 个）", Toast.LENGTH_SHORT).show()
-            }
-        }
+    private fun setupTabsSwipeClose() {
+        // 向上滑动关闭的位移阈值：取系统 touchSlop 的 3 倍，避免与轻微抖动/点击混淆
+        val swipeUpThreshold = ViewConfiguration.get(this).scaledTouchSlop * 3
+        var downY = 0f
+        var closeFired = false
         binding.btnTabs.setOnTouchListener { v, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    longPressFired = false
-                    v.postDelayed(closeRunnable, 1000L)
+                    closeFired = false
+                    downY = event.y
                     false
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    // 手指移出按钮范围时取消长按
-                    if (event.x < 0 || event.y < 0 ||
-                        event.x > v.width || event.y > v.height
-                    ) {
-                        v.removeCallbacks(closeRunnable)
+                    // 向上滑动超过阈值：关闭当前标签页
+                    if (!closeFired && downY - event.y > swipeUpThreshold) {
+                        closeFired = true
+                        val tab = activeTab
+                        if (tab != null) {
+                            closeTab(tab)
+                            Toast.makeText(this, "已关闭标签页（剩 ${tabs.size} 个）", Toast.LENGTH_SHORT).show()
+                        }
                     }
                     false
                 }
                 MotionEvent.ACTION_UP -> {
-                    v.removeCallbacks(closeRunnable)
-                    // 长按已触发关闭时，消费抬起事件以抑制随后的单击
-                    longPressFired
-                }
-                MotionEvent.ACTION_CANCEL -> {
-                    v.removeCallbacks(closeRunnable)
-                    false
+                    // 上滑已触发关闭时，消费抬起事件以抑制随后的单击
+                    closeFired
                 }
                 else -> false
             }
