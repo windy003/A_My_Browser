@@ -13,7 +13,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "2026/7/9-3"
+        versionName = "2026/7/9-4"
     }
 
     buildTypes {
@@ -61,6 +61,9 @@ dependencies {
     // Glide for image loading
     implementation("com.github.bumptech.glide:glide:4.16.0")
     ksp("com.github.bumptech.glide:ksp:4.16.0")
+
+    // SVG 解析：把矢量图标（如 GitHub 的 favicon.svg）栅格化成高清位图
+    implementation("com.caverock:androidsvg-aar:1.4")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")

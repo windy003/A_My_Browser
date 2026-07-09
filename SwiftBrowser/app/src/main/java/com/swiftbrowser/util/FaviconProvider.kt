@@ -6,7 +6,9 @@ import android.net.Uri
 import android.util.LruCache
 import android.widget.ImageView
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.drawable.Drawable
+import com.caverock.androidsvg.SVG
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.DataSource
 import com.bumptech.glide.load.engine.DiskCacheStrategy
@@ -65,6 +67,8 @@ object FaviconProvider {
     private const val ICON_CORNER_PX = 24
     /** 单个图标源下载超时（毫秒），避免个别源卡住整体比较 */
     private const val ICON_DOWNLOAD_TIMEOUT_MS = 6000L
+    /** SVG 矢量图标栅格化成位图的边长（像素）。矢量可任意放大，取较大值保证清晰 */
+    private const val SVG_RASTER_PX = 512
     private var prefs: SharedPreferences? = null
     private var resolvedPrefs: SharedPreferences? = null
 
@@ -352,10 +356,11 @@ object FaviconProvider {
             // 提取 rel 属性
             val rel = extractAttr(tag, "rel")?.lowercase() ?: continue
 
-            // 只关心 apple-touch-icon 和 icon
+            // 关心 apple-touch-icon、icon，以及 fluid-icon（部分名站如 GitHub 用它放 512px 大图）
             val normalizedRel = when {
                 rel.contains("apple-touch-icon") -> "apple-touch-icon"
                 rel == "icon" || rel == "shortcut icon" -> "icon"
+                rel == "fluid-icon" -> "icon"
                 else -> continue
             }
 
@@ -506,8 +511,12 @@ object FaviconProvider {
                 .maxByOrNull { it.width.toLong() * it.height.toLong() }
         }
 
-    /** 用 Glide 以原始尺寸下载单张图，返回一份独立副本；失败或超时返回 null */
+    /** 以原始尺寸下载单张图，返回一份独立副本；失败或超时返回 null。SVG 会栅格化成高清位图 */
     private fun downloadOriginalBitmap(context: Context, url: String): Bitmap? {
+        // SVG 矢量图 Glide 默认解不了，单独用 androidsvg 渲染成高分辨率位图
+        if (url.substringBefore('?').endsWith(".svg", ignoreCase = true)) {
+            return downloadSvgAsBitmap(url)
+        }
         val target = Glide.with(context).asBitmap().load(url).submit()
         return try {
             val bmp = target.get(ICON_DOWNLOAD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
@@ -517,6 +526,32 @@ object FaviconProvider {
             null
         } finally {
             Glide.with(context).clear(target)
+        }
+    }
+
+    /** 下载 SVG 并栅格化成 SVG_RASTER_PX 见方的高清位图；失败返回 null */
+    private fun downloadSvgAsBitmap(url: String): Bitmap? {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 5000
+                readTimeout = 5000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+            }
+            conn.inputStream.use { input ->
+                val svg = SVG.getFromInputStream(input)
+                // 覆盖文档尺寸，强制以高分辨率渲染（矢量放大不失真）
+                svg.setDocumentWidth(SVG_RASTER_PX.toFloat())
+                svg.setDocumentHeight(SVG_RASTER_PX.toFloat())
+                val bmp = Bitmap.createBitmap(SVG_RASTER_PX, SVG_RASTER_PX, Bitmap.Config.ARGB_8888)
+                svg.renderToCanvas(Canvas(bmp))
+                bmp
+            }
+        } catch (e: Exception) {
+            null
+        } finally {
+            conn?.disconnect()
         }
     }
 
