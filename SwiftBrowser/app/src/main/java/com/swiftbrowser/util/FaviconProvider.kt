@@ -7,7 +7,6 @@ import android.util.LruCache
 import android.widget.ImageView
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
-import android.graphics.drawable.BitmapDrawable
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.DataSource
 import com.bumptech.glide.load.engine.DiskCacheStrategy
@@ -24,6 +23,7 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 
 /**
@@ -61,6 +61,10 @@ object FaviconProvider {
     // init 会一次性清掉用旧规则生成的脏缓存。
     private const val CACHE_SCHEMA_VERSION = 2
     private const val SCHEMA_VERSION_KEY = "__schema_version__"
+    /** 快速拨号图标圆角半径（像素），与卡片圆角视觉一致。显示时对原图做圆角用 */
+    private const val ICON_CORNER_PX = 24
+    /** 单个图标源下载超时（毫秒），避免个别源卡住整体比较 */
+    private const val ICON_DOWNLOAD_TIMEOUT_MS = 6000L
     private var prefs: SharedPreferences? = null
     private var resolvedPrefs: SharedPreferences? = null
 
@@ -416,8 +420,10 @@ object FaviconProvider {
     /**
      * 为快速拨号加载图标（圆角矩形，较大尺寸）。
      *
-     * 平时：只从本地持久化文件（filesDir/speeddial_icons）读取，读不到就显示默认图标，绝不联网。
-     * 刷新（用户点刷新按钮）：联网走降级链重新获取，成功后把图标持久化到本地文件。
+     * 平时：只从本地持久化文件（filesDir/speeddial_icons）读取原图并做圆角显示，
+     *       读不到就显示默认图标，绝不联网。
+     * 刷新（用户点刷新按钮）：并发下载所有可获得的图标源，比较真实像素分辨率，
+     *       选最高的那张，存原图并显示。
      */
     fun loadSpeedDialIcon(imageView: ImageView, url: String, customIconUrl: String? = null) {
         val domain = extractDomain(url)
@@ -433,12 +439,14 @@ object FaviconProvider {
         val forceNetwork = pendingRefreshKeys.remove(pageKey)
 
         if (!forceNetwork) {
-            // 平时：直接从本地文件显示，命中最快、离线可用、不依赖易失的 Glide 缓存
+            // 平时：从本地文件读原图，显示时按图标框尺寸缩放 + 圆角。
+            // 命中最快、离线可用、不依赖易失的 Glide 缓存
             if (iconFile != null && iconFile.exists()) {
                 Glide.with(imageView.context)
                     .load(iconFile)
                     // 文件被刷新覆盖后，用修改时间做签名让 Glide 失效旧的内存缓存
                     .signature(ObjectKey(iconFile.lastModified()))
+                    .transform(CenterCrop(), RoundedCorners(ICON_CORNER_PX))
                     .placeholder(R.drawable.ic_speed_dial_default)
                     .error(R.drawable.ic_speed_dial_default)
                     .into(imageView)
@@ -448,14 +456,67 @@ object FaviconProvider {
             return
         }
 
-        // 刷新：联网重新解析并下载，成功后持久化到 iconFile
+        // 刷新：比较所有图标源，选分辨率最高的原图保存并显示
         CoroutineScope(Dispatchers.Main).launch {
-            val linkIcons = resolveIconsFromHtml(url)
-            loadWithFallbackChain(
-                imageView, domain, pageKey, linkIcons,
-                isSpeedDial = true, baseUrl = getBaseUrl(url),
-                forceNetwork = true, persistFile = iconFile
-            )
+            val candidates = collectIconCandidates(url, domain)
+            val best = withContext(Dispatchers.IO) {
+                downloadHighestResBitmap(imageView.context.applicationContext, candidates)
+            }
+            if (best != null) {
+                if (iconFile != null) persistIconBitmap(best, iconFile)
+                Glide.with(imageView.context)
+                    .load(best)
+                    .transform(CenterCrop(), RoundedCorners(ICON_CORNER_PX))
+                    .into(imageView)
+            } else {
+                imageView.setImageResource(R.drawable.ic_speed_dial_default)
+            }
+        }
+    }
+
+    /**
+     * 收集某个页面所有可获得的图标源 URL（去重、保序）：
+     * 网站自身的 <link> 图标 + Brandfetch + DuckDuckGo + Google favicon（IP 则用 /favicon.ico）。
+     */
+    private suspend fun collectIconCandidates(url: String, domain: String): List<String> {
+        val list = LinkedHashSet<String>()
+        // 网站 <link> 里声明的图标（apple-touch-icon / icon），通常分辨率最高
+        list.addAll(resolveIconsFromHtml(url))
+        val baseUrl = getBaseUrl(url)
+        if (isIpAddress(domain)) {
+            if (baseUrl != null) list.add("$baseUrl/favicon.ico")
+        } else {
+            list.add(getBrandfetchUrl(domain, 256))
+            list.add(getDuckDuckGoUrl(domain))
+            list.add(getGoogleFaviconUrl(domain, 256))
+        }
+        return list.toList()
+    }
+
+    /**
+     * 并发下载所有候选图标（原始尺寸），返回像素面积最大的一张（独立副本，不受 Glide 复用影响）。
+     * 全部失败则返回 null。必须在 IO 线程调用。
+     */
+    private suspend fun downloadHighestResBitmap(context: Context, urls: List<String>): Bitmap? =
+        coroutineScope {
+            urls.map { u ->
+                async(Dispatchers.IO) { downloadOriginalBitmap(context, u) }
+            }.awaitAll()
+                .filterNotNull()
+                .maxByOrNull { it.width.toLong() * it.height.toLong() }
+        }
+
+    /** 用 Glide 以原始尺寸下载单张图，返回一份独立副本；失败或超时返回 null */
+    private fun downloadOriginalBitmap(context: Context, url: String): Bitmap? {
+        val target = Glide.with(context).asBitmap().load(url).submit()
+        return try {
+            val bmp = target.get(ICON_DOWNLOAD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            // Glide 返回的 bitmap 属于其 BitmapPool，复制一份独立的以便安全地比较/保存/显示
+            bmp.copy(bmp.config ?: Bitmap.Config.ARGB_8888, false)
+        } catch (e: Exception) {
+            null
+        } finally {
+            Glide.with(context).clear(target)
         }
     }
 
@@ -494,8 +555,7 @@ object FaviconProvider {
         linkIcons: List<String>,
         isSpeedDial: Boolean,
         baseUrl: String? = null,
-        forceNetwork: Boolean = true,
-        persistFile: File? = null
+        forceNetwork: Boolean = true
     ) {
         val defaultRes = if (isSpeedDial) R.drawable.ic_speed_dial_default
                          else android.R.drawable.ic_menu_compass
@@ -517,11 +577,6 @@ object FaviconProvider {
                 val url = model as? String
                 if (url != null) {
                     saveResolvedIcon(pageKey, url)
-                    // 刷新时把真实下载到的图标持久化到本地文件，之后平时打开直接读文件。
-                    // 只有 model 是 URL（真图标）才存；兜底的默认图标 model 是资源 id，不会误存。
-                    if (persistFile != null) {
-                        (resource as? BitmapDrawable)?.bitmap?.let { persistIconBitmap(it, persistFile) }
-                    }
                 }
                 return false
             }
