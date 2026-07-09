@@ -5,7 +5,9 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.util.LruCache
 import android.widget.ImageView
+import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.BitmapDrawable
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.DataSource
 import com.bumptech.glide.load.engine.DiskCacheStrategy
@@ -14,10 +16,14 @@ import com.bumptech.glide.load.resource.bitmap.CenterCrop
 import com.bumptech.glide.load.resource.bitmap.RoundedCorners
 import com.bumptech.glide.request.RequestListener
 import com.bumptech.glide.request.target.Target
+import com.bumptech.glide.signature.ObjectKey
 import com.swiftbrowser.R
 import kotlinx.coroutines.*
+import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.util.regex.Pattern
 
 /**
@@ -59,11 +65,18 @@ object FaviconProvider {
     private var resolvedPrefs: SharedPreferences? = null
 
     /**
+     * 图标图片持久化目录，位于 filesDir（不是 cacheDir），不会被系统当缓存清理。
+     * 快速拨号图标下载成功后存成 PNG，平时直接从这里读取，保证离线、快速、稳定。
+     */
+    private var iconDir: File? = null
+
+    /**
      * 初始化持久化缓存，在 Application.onCreate 中调用
      */
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         resolvedPrefs = context.getSharedPreferences(PREFS_RESOLVED, Context.MODE_PRIVATE)
+        iconDir = File(context.filesDir, "speeddial_icons").apply { if (!exists()) mkdirs() }
 
         // pageKey schema 变更时一次性清理旧缓存，避免老用户继续读到错误的图标
         val storedVersion = prefs?.getInt(SCHEMA_VERSION_KEY, 0) ?: 0
@@ -98,6 +111,31 @@ object FaviconProvider {
     private fun saveResolvedIcon(domain: String, url: String) {
         resolvedIconCache.put(domain, url)
         resolvedPrefs?.edit()?.putString(domain, url)?.apply()
+    }
+
+    /** 返回某个 pageKey 对应的本地图标文件（用 MD5 做文件名，避免非法字符）。iconDir 未初始化时返回 null */
+    private fun iconFileFor(pageKey: String): File? {
+        val dir = iconDir ?: return null
+        val name = MessageDigest.getInstance("MD5")
+            .digest(pageKey.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        return File(dir, "$name.png")
+    }
+
+    /** 把加载成功的图标 bitmap 持久化到本地文件（后台线程写，先写临时文件再改名，避免半截文件） */
+    private fun persistIconBitmap(bitmap: Bitmap, file: File) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val tmp = File(file.parentFile, "${file.name}.tmp")
+                FileOutputStream(tmp).use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                }
+                if (file.exists()) file.delete()
+                tmp.renameTo(file)
+            } catch (_: Exception) {
+                // 存图失败不影响显示，忽略
+            }
+        }
     }
 
     /**
@@ -376,8 +414,10 @@ object FaviconProvider {
     // ==================== 图标加载（快速拨号 & 书签） ====================
 
     /**
-     * 为快速拨号加载图标（圆角矩形，较大尺寸）
-     * 先异步解析网站 link 标签，再用 Glide 链式降级
+     * 为快速拨号加载图标（圆角矩形，较大尺寸）。
+     *
+     * 平时：只从本地持久化文件（filesDir/speeddial_icons）读取，读不到就显示默认图标，绝不联网。
+     * 刷新（用户点刷新按钮）：联网走降级链重新获取，成功后把图标持久化到本地文件。
      */
     fun loadSpeedDialIcon(imageView: ImageView, url: String, customIconUrl: String? = null) {
         val domain = extractDomain(url)
@@ -388,22 +428,33 @@ object FaviconProvider {
             return
         }
 
+        val iconFile = iconFileFor(pageKey)
         // 本轮刷新是否需要联网重取该图标；命中即消费，避免滚动时重复联网
         val forceNetwork = pendingRefreshKeys.remove(pageKey)
 
-        CoroutineScope(Dispatchers.Main).launch {
-            val resolvedUrl = resolvedIconCache.get(pageKey)
-            val linkIcons = when {
-                // 刷新：联网重新解析网站 <link> 标签
-                forceNetwork -> resolveIconsFromHtml(url)
-                // 平时：优先用已解析出的最终图标
-                resolvedUrl != null -> listOf(resolvedUrl)
-                // 平时：只读内存缓存，绝不联网抓 HTML
-                else -> linkIconCache.get(pageKey) ?: emptyList()
+        if (!forceNetwork) {
+            // 平时：直接从本地文件显示，命中最快、离线可用、不依赖易失的 Glide 缓存
+            if (iconFile != null && iconFile.exists()) {
+                Glide.with(imageView.context)
+                    .load(iconFile)
+                    // 文件被刷新覆盖后，用修改时间做签名让 Glide 失效旧的内存缓存
+                    .signature(ObjectKey(iconFile.lastModified()))
+                    .placeholder(R.drawable.ic_speed_dial_default)
+                    .error(R.drawable.ic_speed_dial_default)
+                    .into(imageView)
+            } else {
+                imageView.setImageResource(R.drawable.ic_speed_dial_default)
             }
+            return
+        }
+
+        // 刷新：联网重新解析并下载，成功后持久化到 iconFile
+        CoroutineScope(Dispatchers.Main).launch {
+            val linkIcons = resolveIconsFromHtml(url)
             loadWithFallbackChain(
                 imageView, domain, pageKey, linkIcons,
-                isSpeedDial = true, baseUrl = getBaseUrl(url), forceNetwork = forceNetwork
+                isSpeedDial = true, baseUrl = getBaseUrl(url),
+                forceNetwork = true, persistFile = iconFile
             )
         }
     }
@@ -443,7 +494,8 @@ object FaviconProvider {
         linkIcons: List<String>,
         isSpeedDial: Boolean,
         baseUrl: String? = null,
-        forceNetwork: Boolean = true
+        forceNetwork: Boolean = true,
+        persistFile: File? = null
     ) {
         val defaultRes = if (isSpeedDial) R.drawable.ic_speed_dial_default
                          else android.R.drawable.ic_menu_compass
@@ -452,7 +504,7 @@ object FaviconProvider {
         // 缓存未命中则逐层 error 降级，最终落到默认图标
         val cacheOnly = !forceNetwork
 
-        // 每一层都加 listener，记录最终成功加载的图标 URL
+        // 每一层都加 listener，记录最终成功加载的图标 URL，并在需要时持久化到本地文件
         val successListener = object : RequestListener<Drawable> {
             override fun onLoadFailed(
                 e: GlideException?, model: Any?, target: Target<Drawable>, isFirstResource: Boolean
@@ -465,6 +517,11 @@ object FaviconProvider {
                 val url = model as? String
                 if (url != null) {
                     saveResolvedIcon(pageKey, url)
+                    // 刷新时把真实下载到的图标持久化到本地文件，之后平时打开直接读文件。
+                    // 只有 model 是 URL（真图标）才存；兜底的默认图标 model 是资源 id，不会误存。
+                    if (persistFile != null) {
+                        (resource as? BitmapDrawable)?.bitmap?.let { persistIconBitmap(it, persistFile) }
+                    }
                 }
                 return false
             }
