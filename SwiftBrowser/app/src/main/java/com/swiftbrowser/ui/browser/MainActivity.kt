@@ -1873,6 +1873,16 @@ class MainActivity : AppCompatActivity() {
             com.bumptech.glide.Glide.get(this@MainActivity).clearMemory()
             // 清除 FaviconProvider 的 link 图标缓存
             FaviconProvider.clearLinkIconCache()
+            // 收集当前所有快速拨号（站点 + 文件夹子项）的 URL，标记它们本轮需要联网重取。
+            // 平时加载只读缓存，只有这里标记过的 URL 才会真正走网络。
+            val refreshUrls = mutableListOf<String>()
+            speedDialAdapter.getDisplayList().forEach { item ->
+                when (item) {
+                    is SpeedDialItem.Site -> item.bookmark.url?.let { refreshUrls.add(it) }
+                    is SpeedDialItem.Folder -> item.children.forEach { c -> c.url?.let { refreshUrls.add(it) } }
+                }
+            }
+            FaviconProvider.beginForceRefresh(refreshUrls)
             // 通知适配器重新绑定所有项，触发图标重新加载
             speedDialAdapter.notifyDataSetChanged()
             Toast.makeText(this@MainActivity, "图标已刷新", Toast.LENGTH_SHORT).show()

@@ -40,6 +40,14 @@ object FaviconProvider {
     /** 缓存每个页面最终成功加载的图标 URL，重启后直接用，无需重跑降级链 */
     private val resolvedIconCache = LruCache<String, String>(200)
 
+    /**
+     * 本轮「强制联网刷新」还未消费的 pageKey 集合。
+     * 用户点刷新按钮时由 [beginForceRefresh] 填充；每个图标联网加载一次后即从集合移除，
+     * 避免刷新后滚动列表时重复发起网络请求。平时（集合为空）所有加载都只读缓存、不联网。
+     * 仅在主线程访问。
+     */
+    private val pendingRefreshKeys = HashSet<String>()
+
     private const val PREFS_NAME = "favicon_link_cache"
     private const val PREFS_RESOLVED = "favicon_resolved_cache"
     private const val SEPARATOR = "\u001F" // 单元分隔符，用于拼接 URL 列表
@@ -90,6 +98,16 @@ object FaviconProvider {
     private fun saveResolvedIcon(domain: String, url: String) {
         resolvedIconCache.put(domain, url)
         resolvedPrefs?.edit()?.putString(domain, url)?.apply()
+    }
+
+    /**
+     * 标记这批 URL 在「下一次加载」时需要联网重新获取（用户点刷新按钮时调用）。
+     * 应在清空缓存后、通知列表重绑之前调用。传入快速拨号里所有站点/文件夹子项的原始 URL。
+     * 只有在此集合中的 pageKey 才会联网；其余一律只读缓存，缓存没有就显示默认图标。
+     */
+    fun beginForceRefresh(urls: Collection<String>) {
+        pendingRefreshKeys.clear()
+        urls.forEach { url -> extractPageKey(url)?.let { pendingRefreshKeys.add(it) } }
     }
 
     /**
@@ -370,10 +388,23 @@ object FaviconProvider {
             return
         }
 
+        // 本轮刷新是否需要联网重取该图标；命中即消费，避免滚动时重复联网
+        val forceNetwork = pendingRefreshKeys.remove(pageKey)
+
         CoroutineScope(Dispatchers.Main).launch {
             val resolvedUrl = resolvedIconCache.get(pageKey)
-            val linkIcons = if (resolvedUrl != null) listOf(resolvedUrl) else resolveIconsFromHtml(url)
-            loadWithFallbackChain(imageView, domain, pageKey, linkIcons, isSpeedDial = true, baseUrl = getBaseUrl(url))
+            val linkIcons = when {
+                // 刷新：联网重新解析网站 <link> 标签
+                forceNetwork -> resolveIconsFromHtml(url)
+                // 平时：优先用已解析出的最终图标
+                resolvedUrl != null -> listOf(resolvedUrl)
+                // 平时：只读内存缓存，绝不联网抓 HTML
+                else -> linkIconCache.get(pageKey) ?: emptyList()
+            }
+            loadWithFallbackChain(
+                imageView, domain, pageKey, linkIcons,
+                isSpeedDial = true, baseUrl = getBaseUrl(url), forceNetwork = forceNetwork
+            )
         }
     }
 
@@ -392,7 +423,11 @@ object FaviconProvider {
         CoroutineScope(Dispatchers.Main).launch {
             val resolvedUrl = resolvedIconCache.get(pageKey)
             val linkIcons = if (resolvedUrl != null) listOf(resolvedUrl) else resolveIconsFromHtml(url)
-            loadWithFallbackChain(imageView, domain, pageKey, linkIcons, isSpeedDial = false, baseUrl = getBaseUrl(url))
+            // 书签列表保持原有联网获取行为（不受快速拨号「只读缓存」策略影响）
+            loadWithFallbackChain(
+                imageView, domain, pageKey, linkIcons,
+                isSpeedDial = false, baseUrl = getBaseUrl(url), forceNetwork = true
+            )
         }
     }
 
@@ -407,11 +442,15 @@ object FaviconProvider {
         pageKey: String,
         linkIcons: List<String>,
         isSpeedDial: Boolean,
-        baseUrl: String? = null
+        baseUrl: String? = null,
+        forceNetwork: Boolean = true
     ) {
         val defaultRes = if (isSpeedDial) R.drawable.ic_speed_dial_default
                          else android.R.drawable.ic_menu_compass
         val isIp = isIpAddress(domain)
+        // forceNetwork=false 时只从 Glide 磁盘/内存缓存取图，不发任何网络请求；
+        // 缓存未命中则逐层 error 降级，最终落到默认图标
+        val cacheOnly = !forceNetwork
 
         // 每一层都加 listener，记录最终成功加载的图标 URL
         val successListener = object : RequestListener<Drawable> {
@@ -437,6 +476,7 @@ object FaviconProvider {
                 .load("${baseUrl}/favicon.ico")
                 .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .onlyRetrieveFromCache(cacheOnly)
                 .listener(successListener)
                 .error(defaultRes)
         } else {
@@ -444,6 +484,7 @@ object FaviconProvider {
                 .load(getGoogleFaviconUrl(domain))
                 .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .onlyRetrieveFromCache(cacheOnly)
                 .listener(successListener)
                 .error(defaultRes)
 
@@ -451,6 +492,7 @@ object FaviconProvider {
                 .load(getDuckDuckGoUrl(domain))
                 .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .onlyRetrieveFromCache(cacheOnly)
                 .listener(successListener)
                 .error(googleRequest)
         }
@@ -461,6 +503,7 @@ object FaviconProvider {
                 .load(iconUrl)
                 .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .onlyRetrieveFromCache(cacheOnly)
                 .listener(successListener)
                 .error(request)
         }
