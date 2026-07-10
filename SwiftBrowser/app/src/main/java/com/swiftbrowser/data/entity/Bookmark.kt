@@ -13,8 +13,7 @@ data class Bookmark(
     val parentId: Long? = null,     // null = 根目录
     val position: Int = 0,
     val favicon: String? = null,
-    val createdAt: Long = System.currentTimeMillis(),
-    val firebaseId: String? = null
+    val createdAt: Long = System.currentTimeMillis()
 ) {
     companion object {
         /** 快速拨号根文件夹的固定名称 */

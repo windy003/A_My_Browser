@@ -13,7 +13,7 @@ import com.swiftbrowser.data.entity.History
 
 @Database(
     entities = [Bookmark::class, History::class, DownloadRecord::class],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
