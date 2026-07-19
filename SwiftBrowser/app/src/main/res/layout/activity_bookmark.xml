@@ -46,6 +46,15 @@
             android:tint="@color/white" />
 
         <ImageButton
+            android:id="@+id/btnRefreshIcons"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="刷新书签图标"
+            android:src="@drawable/ic_refresh"
+            android:tint="@color/white" />
+
+        <ImageButton
             android:id="@+id/btnCompare"
             android:layout_width="48dp"
             android:layout_height="48dp"

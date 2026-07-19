@@ -7,16 +7,10 @@ import android.util.LruCache
 import android.widget.ImageView
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.drawable.Drawable
 import com.caverock.androidsvg.SVG
 import com.bumptech.glide.Glide
-import com.bumptech.glide.load.DataSource
-import com.bumptech.glide.load.engine.DiskCacheStrategy
-import com.bumptech.glide.load.engine.GlideException
 import com.bumptech.glide.load.resource.bitmap.CenterCrop
 import com.bumptech.glide.load.resource.bitmap.RoundedCorners
-import com.bumptech.glide.request.RequestListener
-import com.bumptech.glide.request.target.Target
 import com.bumptech.glide.signature.ObjectKey
 import com.swiftbrowser.R
 import kotlinx.coroutines.*
@@ -45,9 +39,6 @@ object FaviconProvider {
      */
     private val linkIconCache = LruCache<String, List<String>>(200)
 
-    /** 缓存每个页面最终成功加载的图标 URL，重启后直接用，无需重跑降级链 */
-    private val resolvedIconCache = LruCache<String, String>(200)
-
     /**
      * 本轮「强制联网刷新」还未消费的 pageKey 集合。
      * 用户点刷新按钮时由 [beginForceRefresh] 填充；每个图标联网加载一次后即从集合移除，
@@ -57,7 +48,6 @@ object FaviconProvider {
     private val pendingRefreshKeys = HashSet<String>()
 
     private const val PREFS_NAME = "favicon_link_cache"
-    private const val PREFS_RESOLVED = "favicon_resolved_cache"
     private const val SEPARATOR = "\u001F" // 单元分隔符，用于拼接 URL 列表
     // pageKey schema 版本。pageKey 计算规则变更时把这里 +1，
     // init 会一次性清掉用旧规则生成的脏缓存。
@@ -70,7 +60,6 @@ object FaviconProvider {
     /** SVG 矢量图标栅格化成位图的边长（像素）。矢量可任意放大，取较大值保证清晰 */
     private const val SVG_RASTER_PX = 512
     private var prefs: SharedPreferences? = null
-    private var resolvedPrefs: SharedPreferences? = null
 
     /**
      * 图标图片持久化目录，位于 filesDir（不是 cacheDir），不会被系统当缓存清理。
@@ -83,14 +72,12 @@ object FaviconProvider {
      */
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        resolvedPrefs = context.getSharedPreferences(PREFS_RESOLVED, Context.MODE_PRIVATE)
         iconDir = File(context.filesDir, "speeddial_icons").apply { if (!exists()) mkdirs() }
 
         // pageKey schema 变更时一次性清理旧缓存，避免老用户继续读到错误的图标
         val storedVersion = prefs?.getInt(SCHEMA_VERSION_KEY, 0) ?: 0
         if (storedVersion != CACHE_SCHEMA_VERSION) {
             prefs?.edit()?.clear()?.putInt(SCHEMA_VERSION_KEY, CACHE_SCHEMA_VERSION)?.apply()
-            resolvedPrefs?.edit()?.clear()?.apply()
             return
         }
 
@@ -101,11 +88,6 @@ object FaviconProvider {
                 linkIconCache.put(domain, value.split(SEPARATOR))
             }
         }
-        resolvedPrefs?.all?.forEach { (domain, value) ->
-            if (value is String && value.isNotEmpty()) {
-                resolvedIconCache.put(domain, value)
-            }
-        }
     }
 
     /**
@@ -113,12 +95,6 @@ object FaviconProvider {
      */
     private fun persistToPrefs(domain: String, urls: List<String>) {
         prefs?.edit()?.putString(domain, urls.joinToString(SEPARATOR))?.apply()
-    }
-
-    /** 记录某个域名最终成功加载的图标 URL */
-    private fun saveResolvedIcon(domain: String, url: String) {
-        resolvedIconCache.put(domain, url)
-        resolvedPrefs?.edit()?.putString(domain, url)?.apply()
     }
 
     /** 返回某个 pageKey 对应的本地图标文件（用 MD5 做文件名，避免非法字符）。iconDir 未初始化时返回 null */
@@ -161,9 +137,7 @@ object FaviconProvider {
      */
     fun clearLinkIconCache() {
         linkIconCache.evictAll()
-        resolvedIconCache.evictAll()
         prefs?.edit()?.clear()?.apply()
-        resolvedPrefs?.edit()?.clear()?.apply()
     }
 
     // ==================== 域名提取 ====================
@@ -423,19 +397,31 @@ object FaviconProvider {
     // ==================== 图标加载（快速拨号 & 书签） ====================
 
     /**
-     * 为快速拨号加载图标（圆角矩形，较大尺寸）。
+     * 为快速拨号加载图标（圆角矩形，较大尺寸）。详见 [loadPersistedIcon]。
+     */
+    fun loadSpeedDialIcon(imageView: ImageView, url: String, customIconUrl: String? = null) {
+        loadPersistedIcon(imageView, url, isSpeedDial = true)
+    }
+
+    /**
+     * 快速拨号与书签共用的图标加载逻辑。
      *
-     * 平时：只从本地持久化文件（filesDir/speeddial_icons）读取原图并做圆角显示，
+     * 平时：只从本地持久化文件（filesDir/speeddial_icons）读取原图并按形状显示，
      *       读不到就显示默认图标，绝不联网。
      * 刷新（用户点刷新按钮）：并发下载所有可获得的图标源，比较真实像素分辨率，
      *       选最高的那张，存原图并显示。
+     *
+     * 两处共用同一份本地原图（按 pageKey 存），显示时快速拨号做圆角矩形、书签做圆形，
+     * 因此在任一处刷新，另一处也会受益。
      */
-    fun loadSpeedDialIcon(imageView: ImageView, url: String, customIconUrl: String? = null) {
+    private fun loadPersistedIcon(imageView: ImageView, url: String, isSpeedDial: Boolean) {
+        val defaultRes = if (isSpeedDial) R.drawable.ic_speed_dial_default
+                         else android.R.drawable.ic_menu_compass
         val domain = extractDomain(url)
         val pageKey = extractPageKey(url)
 
         if (domain == null || pageKey == null) {
-            imageView.setImageResource(R.drawable.ic_speed_dial_default)
+            imageView.setImageResource(defaultRes)
             return
         }
 
@@ -444,19 +430,22 @@ object FaviconProvider {
         val forceNetwork = pendingRefreshKeys.remove(pageKey)
 
         if (!forceNetwork) {
-            // 平时：从本地文件读原图，显示时按图标框尺寸缩放 + 圆角。
+            // 平时：从本地文件读原图，显示时按图标框尺寸缩放 + 形状。
             // 命中最快、离线可用、不依赖易失的 Glide 缓存
             if (iconFile != null && iconFile.exists()) {
                 Glide.with(imageView.context)
                     .load(iconFile)
                     // 文件被刷新覆盖后，用修改时间做签名让 Glide 失效旧的内存缓存
                     .signature(ObjectKey(iconFile.lastModified()))
-                    .transform(CenterCrop(), RoundedCorners(ICON_CORNER_PX))
-                    .placeholder(R.drawable.ic_speed_dial_default)
-                    .error(R.drawable.ic_speed_dial_default)
+                    .apply {
+                        if (isSpeedDial) transform(CenterCrop(), RoundedCorners(ICON_CORNER_PX))
+                        else circleCrop()
+                    }
+                    .placeholder(defaultRes)
+                    .error(defaultRes)
                     .into(imageView)
             } else {
-                imageView.setImageResource(R.drawable.ic_speed_dial_default)
+                imageView.setImageResource(defaultRes)
             }
             return
         }
@@ -471,10 +460,13 @@ object FaviconProvider {
                 if (iconFile != null) persistIconBitmap(best, iconFile)
                 Glide.with(imageView.context)
                     .load(best)
-                    .transform(CenterCrop(), RoundedCorners(ICON_CORNER_PX))
+                    .apply {
+                        if (isSpeedDial) transform(CenterCrop(), RoundedCorners(ICON_CORNER_PX))
+                        else circleCrop()
+                    }
                     .into(imageView)
             } else {
-                imageView.setImageResource(R.drawable.ic_speed_dial_default)
+                imageView.setImageResource(defaultRes)
             }
         }
     }
@@ -556,124 +548,10 @@ object FaviconProvider {
     }
 
     /**
-     * 为书签列表加载图标（圆形，较小尺寸）
+     * 为书签列表加载图标（圆形，较小尺寸）。与快速拨号共用 [loadPersistedIcon]：
+     * 平时只读本地持久化图标、不联网，用户点书签面板的刷新按钮才联网重取。
      */
     fun loadBookmarkFavicon(imageView: ImageView, url: String, customFavicon: String? = null) {
-        val domain = extractDomain(url)
-        val pageKey = extractPageKey(url)
-
-        if (domain == null || pageKey == null) {
-            imageView.setImageResource(android.R.drawable.ic_menu_compass)
-            return
-        }
-
-        CoroutineScope(Dispatchers.Main).launch {
-            val resolvedUrl = resolvedIconCache.get(pageKey)
-            val linkIcons = if (resolvedUrl != null) listOf(resolvedUrl) else resolveIconsFromHtml(url)
-            // 书签列表保持原有联网获取行为（不受快速拨号「只读缓存」策略影响）
-            loadWithFallbackChain(
-                imageView, domain, pageKey, linkIcons,
-                isSpeedDial = false, baseUrl = getBaseUrl(url), forceNetwork = true
-            )
-        }
-    }
-
-    /**
-     * 构建完整降级链:
-     * 域名: Brandfetch -> link 标签图标(按分辨率从高到低) -> DuckDuckGo -> Google Favicon -> 默认
-     * IP地址: link 标签图标 -> /favicon.ico -> 默认
-     */
-    private fun loadWithFallbackChain(
-        imageView: ImageView,
-        domain: String,
-        pageKey: String,
-        linkIcons: List<String>,
-        isSpeedDial: Boolean,
-        baseUrl: String? = null,
-        forceNetwork: Boolean = true
-    ) {
-        val defaultRes = if (isSpeedDial) R.drawable.ic_speed_dial_default
-                         else android.R.drawable.ic_menu_compass
-        val isIp = isIpAddress(domain)
-        // forceNetwork=false 时只从 Glide 磁盘/内存缓存取图，不发任何网络请求；
-        // 缓存未命中则逐层 error 降级，最终落到默认图标
-        val cacheOnly = !forceNetwork
-
-        // 每一层都加 listener，记录最终成功加载的图标 URL，并在需要时持久化到本地文件
-        val successListener = object : RequestListener<Drawable> {
-            override fun onLoadFailed(
-                e: GlideException?, model: Any?, target: Target<Drawable>, isFirstResource: Boolean
-            ): Boolean = false
-
-            override fun onResourceReady(
-                resource: Drawable, model: Any, target: Target<Drawable>,
-                dataSource: DataSource, isFirstResource: Boolean
-            ): Boolean {
-                val url = model as? String
-                if (url != null) {
-                    saveResolvedIcon(pageKey, url)
-                }
-                return false
-            }
-        }
-
-        // 从最低优先级开始，向外包装 error() 降级
-        var request = if (isIp && baseUrl != null) {
-            Glide.with(imageView.context)
-                .load("${baseUrl}/favicon.ico")
-                .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .onlyRetrieveFromCache(cacheOnly)
-                .listener(successListener)
-                .error(defaultRes)
-        } else {
-            val googleRequest = Glide.with(imageView.context)
-                .load(getGoogleFaviconUrl(domain))
-                .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .onlyRetrieveFromCache(cacheOnly)
-                .listener(successListener)
-                .error(defaultRes)
-
-            Glide.with(imageView.context)
-                .load(getDuckDuckGoUrl(domain))
-                .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .onlyRetrieveFromCache(cacheOnly)
-                .listener(successListener)
-                .error(googleRequest)
-        }
-
-        // link 标签图标，从分辨率最低的开始包装
-        for (iconUrl in linkIcons.reversed()) {
-            request = Glide.with(imageView.context)
-                .load(iconUrl)
-                .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .onlyRetrieveFromCache(cacheOnly)
-                .listener(successListener)
-                .error(request)
-        }
-
-        if (isIp) {
-            val topUrl = if (linkIcons.isNotEmpty()) linkIcons.first() else "${baseUrl}/favicon.ico"
-            Glide.with(imageView.context)
-                .load(topUrl)
-                .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .placeholder(defaultRes)
-                .listener(successListener)
-                .error(request)
-                .into(imageView)
-        } else {
-            Glide.with(imageView.context)
-                .load(getBrandfetchUrl(domain, if (isSpeedDial) 256 else 128))
-                .apply { if (isSpeedDial) transform(CenterCrop(), RoundedCorners(24)) else circleCrop() }
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .placeholder(defaultRes)
-                .listener(successListener)
-                .error(request)
-                .into(imageView)
-        }
+        loadPersistedIcon(imageView, url, isSpeedDial = false)
     }
 }

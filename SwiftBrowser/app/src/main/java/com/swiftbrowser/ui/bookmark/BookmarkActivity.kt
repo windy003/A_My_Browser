@@ -24,6 +24,7 @@ import com.swiftbrowser.SwiftBrowserApp
 import com.swiftbrowser.data.entity.Bookmark
 import com.swiftbrowser.databinding.ActivityBookmarkBinding
 import com.swiftbrowser.sync.CloudSyncManager
+import com.swiftbrowser.util.FaviconProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -83,6 +84,11 @@ class BookmarkActivity : AppCompatActivity() {
             } else {
                 finish()
             }
+        }
+
+        // 刷新书签图标按钮：清缓存并联网重取当前列表所有书签的图标
+        binding.btnRefreshIcons.setOnClickListener {
+            refreshBookmarkIcons()
         }
 
         // 与云端比较按钮
@@ -221,6 +227,30 @@ class BookmarkActivity : AppCompatActivity() {
             adapter.submitList(items)
             binding.tvEmpty.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
             binding.rvBookmarks.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
+        }
+    }
+
+    /**
+     * 刷新当前列表所有书签的图标。与快速拨号的刷新一致：
+     * 清除 Glide 缓存与 link 解析缓存，标记当前书签 URL 本轮需要联网重取，
+     * 然后重新绑定列表触发重新加载。平时书签图标只读本地缓存、不联网。
+     */
+    private fun refreshBookmarkIcons() {
+        lifecycleScope.launch {
+            // 清除 Glide 磁盘缓存（必须在 IO 线程）
+            withContext(Dispatchers.IO) {
+                com.bumptech.glide.Glide.get(this@BookmarkActivity).clearDiskCache()
+            }
+            // 清除 Glide 内存缓存（必须在主线程）
+            com.bumptech.glide.Glide.get(this@BookmarkActivity).clearMemory()
+            // 清除 link 图标解析缓存，强制重新抓取网页 <link>
+            FaviconProvider.clearLinkIconCache()
+            // 标记当前列表中所有书签的 URL 本轮需要联网重取
+            val refreshUrls = adapter.currentList.mapNotNull { if (it.isFolder) null else it.url }
+            FaviconProvider.beginForceRefresh(refreshUrls)
+            // 重新绑定所有项，触发图标重新加载
+            adapter.notifyItemRangeChanged(0, adapter.itemCount)
+            Toast.makeText(this@BookmarkActivity, "图标已刷新", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -613,6 +643,7 @@ class BookmarkActivity : AppCompatActivity() {
         binding.btnImport.visibility = View.GONE
         binding.btnNewFolder.visibility = View.GONE
         binding.btnCompare.visibility = View.GONE
+        binding.btnRefreshIcons.visibility = View.GONE
     }
 
     private fun exitBatchDeleteMode() {
@@ -621,6 +652,7 @@ class BookmarkActivity : AppCompatActivity() {
         binding.btnImport.visibility = View.VISIBLE
         binding.btnNewFolder.visibility = View.VISIBLE
         binding.btnCompare.visibility = View.VISIBLE
+        binding.btnRefreshIcons.visibility = View.VISIBLE
     }
 
     private fun confirmBatchDelete() {
