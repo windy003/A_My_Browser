@@ -1668,7 +1668,7 @@ class MainActivity : AppCompatActivity() {
             if (isShowingWebView) {
                 activeTab?.webView?.reload()
             } else {
-                refreshSpeedDialIcons()
+                Toast.makeText(this, "请先浏览一个网页", Toast.LENGTH_SHORT).show()
             }
         }
         binding.btnMore.setOnClickListener { view ->
@@ -1732,6 +1732,10 @@ class MainActivity : AppCompatActivity() {
                         } else {
                             Toast.makeText(this, "请先浏览一个网页", Toast.LENGTH_SHORT).show()
                         }
+                        true
+                    }
+                    R.id.action_refresh_speed_dial -> {
+                        refreshSpeedDialIcons()
                         true
                     }
                     R.id.action_batch_delete -> {
