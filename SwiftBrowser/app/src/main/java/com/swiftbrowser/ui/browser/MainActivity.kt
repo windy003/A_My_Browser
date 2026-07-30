@@ -278,8 +278,10 @@ class MainActivity : AppCompatActivity() {
         setupFindInPage()
         setupKeyboardListener()
 
-        // 创建第一个标签
-        createNewTab()
+        // 恢复上次退出前的所有标签；没有可恢复的状态时（如首次启动）新建一个标签
+        if (!restoreTabsState()) {
+            createNewTab()
+        }
 
         // 监听下载完成，用于弹出"下载完成"提示
         val downloadFilter = android.content.IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
@@ -291,6 +293,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         handleIntent(intent)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // 尽早持久化标签状态：进程可能在 onStop 之后被系统直接杀死，不会走到 onDestroy
+        saveTabsState()
     }
 
     override fun onDestroy() {
@@ -403,6 +411,51 @@ class MainActivity : AppCompatActivity() {
     private fun updateTabCount() {
         val current = tabs.indexOf(activeTab) + 1
         binding.tvTabCountBottom.text = if (current > 0) "$current/${tabs.size}" else tabs.size.toString()
+    }
+
+    // ==================== 标签状态持久化（关闭 App 后恢复上次所有标签） ====================
+
+    /** 把当前所有标签的 URL 及活跃标签下标存入 SharedPreferences */
+    private fun saveTabsState() {
+        try {
+            val arr = org.json.JSONArray()
+            for (tab in tabs) {
+                val obj = org.json.JSONObject()
+                obj.put("url", tab.url ?: org.json.JSONObject.NULL)
+                obj.put("title", tab.title ?: org.json.JSONObject.NULL)
+                arr.put(obj)
+            }
+            prefs.edit()
+                .putString("saved_tabs", arr.toString())
+                .putInt("saved_active_tab_index", tabs.indexOf(activeTab))
+                .apply()
+        } catch (_: Exception) { }
+    }
+
+    /** 从 SharedPreferences 恢复上次退出前的所有标签；成功恢复至少一个标签时返回 true */
+    private fun restoreTabsState(): Boolean {
+        val json = prefs.getString("saved_tabs", null) ?: return false
+        return try {
+            val arr = org.json.JSONArray(json)
+            if (arr.length() == 0) return false
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val url = if (obj.isNull("url")) null else obj.optString("url").takeIf { it.isNotEmpty() }
+                val title = if (obj.isNull("title")) null else obj.optString("title").takeIf { it.isNotEmpty() }
+                val tab = Tab()
+                tab.webView = createWebView()
+                tab.url = url
+                tab.title = title
+                tabs.add(tab)
+                if (url != null) tab.webView?.loadUrl(url)
+            }
+            val activeIndex = prefs.getInt("saved_active_tab_index", 0).coerceIn(0, tabs.size - 1)
+            switchToTab(tabs[activeIndex])
+            updateTabCount()
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     // ==================== 标签管理界面 ====================
