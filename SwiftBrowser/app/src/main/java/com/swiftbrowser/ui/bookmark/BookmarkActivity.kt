@@ -909,13 +909,18 @@ class BookmarkActivity : AppCompatActivity() {
                 // 手动展开 ListView 高度使其在 ScrollView 中完整显示
                 fun expandListView(listView: ListView) {
                     val listAdapter = listView.adapter ?: return
+                    // 宽度必须用 EXACTLY 传入真实宽度，否则标题过长时测量阶段
+                    // 不会换行（按单行计算高度），而实际显示时会换行，导致
+                    // 算出的总高度比真实渲染高度小，末尾内容被裁掉且无法再滑动
+                    val widthSpec = if (listView.width > 0) {
+                        View.MeasureSpec.makeMeasureSpec(listView.width, View.MeasureSpec.EXACTLY)
+                    } else {
+                        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+                    }
                     var totalHeight = 0
                     for (i in 0 until listAdapter.count) {
                         val item = listAdapter.getView(i, null, listView)
-                        item.measure(
-                            View.MeasureSpec.makeMeasureSpec(listView.width, View.MeasureSpec.UNSPECIFIED),
-                            View.MeasureSpec.UNSPECIFIED
-                        )
+                        item.measure(widthSpec, View.MeasureSpec.UNSPECIFIED)
                         totalHeight += item.measuredHeight
                     }
                     listView.layoutParams = listView.layoutParams?.apply {
@@ -1192,6 +1197,14 @@ class BookmarkActivity : AppCompatActivity() {
                     .setView(dialogView)
                     .setNegativeButton("关闭", null)
                     .show()
+
+                // 固定对话框窗口高度（屏幕的 85%），避免 WRAP_CONTENT 与
+                // expandListView 的异步高度回填产生竞争，导致底部按钮区域
+                // 偶尔被挤出屏幕且内部 ScrollView 无法继续滚动到底部
+                dialog.window?.setLayout(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    (ctx.resources.displayMetrics.heightPixels * 0.85).toInt()
+                )
 
                 compareDialog = dialog
 
