@@ -317,9 +317,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleIntent(intent: Intent) {
-        val url = intent.dataString
-        if (url != null) {
-            loadUrl(url)
+        val uri = intent.data ?: return
+        when (uri.scheme) {
+            "file", "content" -> openMhtmlFromUri(uri)
+            else -> loadUrl(uri.toString())
         }
     }
 

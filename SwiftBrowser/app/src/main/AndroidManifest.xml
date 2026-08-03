@@ -41,6 +41,28 @@
                 <data android:scheme="http" />
                 <data android:scheme="https" />
             </intent-filter>
+            <!-- 文件管理器正确识别出 mhtml MIME 类型时匹配（scheme 缺省即默认支持 content/file） -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="multipart/related" />
+                <data android:mimeType="message/rfc822" />
+                <data android:mimeType="application/x-mimearchive" />
+            </intent-filter>
+            <!-- 兜底：很多文件管理器把 .mht/.mhtml 识别成 application/octet-stream，
+                 用 mimeType="*/*" + pathPattern 按扩展名匹配 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.mhtml" />
+                <data android:pathPattern=".*\\.mht" />
+                <data android:pathPattern=".*\\.MHTML" />
+                <data android:pathPattern=".*\\.MHT" />
+            </intent-filter>
         </activity>
 
         <activity
