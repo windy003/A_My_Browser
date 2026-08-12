@@ -28,6 +28,7 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.ViewConfiguration
+import android.util.Log
 import android.view.View
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
@@ -326,9 +327,12 @@ class MainActivity : AppCompatActivity() {
 
     // ==================== 多标签管理 ====================
 
-    private fun createNewTab(): Tab {
+    private fun createNewTab(pendingUrl: String? = null): Tab {
+        Log.d("OAuthDebug", "createNewTab called pendingUrl=$pendingUrl")
         val tab = Tab()
         tab.webView = createWebView()
+        // 预先写入目标 URL，避免 switchToTab() 因 tab.url 为空而先闪一下首页
+        tab.url = pendingUrl
         tabs.add(tab)
         switchToTab(tab)
         updateTabCount()
@@ -562,6 +566,10 @@ class MainActivity : AppCompatActivity() {
             settings.cacheMode = WebSettings.LOAD_DEFAULT
             // 允许加载本地文件（用于打开 MHTML 离线网页）
             settings.allowFileAccess = true
+            // 允许 JS 弹出新窗口，并支持多窗口——否则 window.open()（如 Google 登录弹窗）
+            // 不会触发下面的 onCreateWindow，弹窗请求会被 WebView 直接丢弃
+            settings.javaScriptCanOpenWindowsAutomatically = true
+            settings.setSupportMultipleWindows(true)
             // 防止 WebView 字体跟随系统字体缩放
             settings.textZoom = 100
 
@@ -581,6 +589,7 @@ class MainActivity : AppCompatActivity() {
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                     super.onPageStarted(view, url, favicon)
+                    Log.d("OAuthDebug", "onPageStarted url=$url view=${view?.hashCode()}")
                     // 桌面模式视口注入的回退路径：设备不支持 DOCUMENT_START_SCRIPT 时，
                     // 在页面开始加载时尽早注入（可能有轻微闪烁，但能命中桌面布局）。
                     if (desktopModeEnabled && view != null &&
@@ -641,8 +650,6 @@ class MainActivity : AppCompatActivity() {
                                     iframe.remove();
                                 }
                             });
-                            // 阻止 window.open 弹窗
-                            window.open = function() { return null; };
                         })();
                     """.trimIndent(), null)
 
@@ -683,6 +690,7 @@ class MainActivity : AppCompatActivity() {
                     request: WebResourceRequest?
                 ): Boolean {
                     val url = request?.url?.toString() ?: return false
+                    Log.d("OAuthDebug", "main shouldOverrideUrlLoading url=$url")
                     if (!url.startsWith("http://") && !url.startsWith("https://")) {
                         try {
                             if (url.startsWith("intent://")) {
@@ -732,6 +740,18 @@ class MainActivity : AppCompatActivity() {
                         if (newProgress == 100) {
                             binding.progressBar.visibility = View.GONE
                         }
+                    }
+                }
+
+                // 网页调用 window.close()（如 OAuth 弹窗登录结束后）：关闭这个弹窗标签页，
+                // 切回发起它的标签页，而不是把这个已经没用的空白页留在屏幕上
+                override fun onCloseWindow(window: WebView?) {
+                    Log.d("OAuthDebug", "onCloseWindow called")
+                    val tab = findTabByWebView(window) ?: return
+                    val openerTab = tab.openerTabId?.let { openerId -> tabs.find { it.id == openerId } }
+                    closeTab(tab)
+                    if (openerTab != null && tabs.contains(openerTab)) {
+                        switchToTab(openerTab)
                     }
                 }
 
@@ -834,35 +854,32 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                // 处理 OAuth 等需要弹窗的页面（如 Google 登录），复用当前 WebView
+                // 处理 OAuth 等需要弹窗的页面（如 Google 登录）
                 override fun onCreateWindow(
                     view: WebView?,
                     isDialog: Boolean,
                     isUserGesture: Boolean,
                     resultMsg: android.os.Message?
                 ): Boolean {
-                    // 用临时 WebView 获取弹窗的目标 URL，拦截广告弹窗
-                    val tempWebView = WebView(this@MainActivity)
-                    tempWebView.webViewClient = object : WebViewClient() {
-                        override fun shouldOverrideUrlLoading(
-                            view: WebView?,
-                            request: WebResourceRequest?
-                        ): Boolean {
-                            val url = request?.url?.toString() ?: return true
-                            val host = request.url?.host?.lowercase() ?: return true
-                            if (isAdHost(host)) {
-                                tempWebView.destroy()
-                                return true // 拦截广告弹窗
-                            }
-                            // 非广告链接，在新标签页中打开
-                            tempWebView.destroy()
-                            createNewTab()
-                            loadUrl(url)
-                            return true
-                        }
-                    }
+                    Log.d("OAuthDebug", "onCreateWindow fired, isDialog=$isDialog isUserGesture=$isUserGesture")
+                    // 直接把 window.open() 弹窗放进一个新标签页，复用完整配置的 WebView 实例。
+                    // 之前用一次性临时 WebView 探测目标 URL、再销毁重建到另一个 WebView 里的做法，
+                    // 会丢失 window.open() 返回给网页 JS 的窗口引用，导致 Google 登录流程最后一步
+                    // window.opener.postMessage() 回传失败——网页检测不到弹窗完成后会再弹一次，
+                    // 表现为又跳出一个空白新标签页，而真正登录成功的内容停留在前一个标签页里。
+                    // 广告弹窗拦截交给这个新 WebView 自身 webViewClient 里已有的 isAdHost 判断。
+                    val tab = Tab()
+                    tab.openerTabId = activeTab?.id
+                    val popupWebView = createWebView()
+                    tab.webView = popupWebView
+                    tabs.add(tab)
+                    switchToTab(tab)
+                    updateTabCount()
+                    // 弹窗内容即将异步加载，tab.url 目前还是 null，switchToTab 会先显示首页——
+                    // 这里直接切到 WebView 视图，避免卡在首页看不到弹窗加载出来的内容
+                    showWebView()
                     val transport = resultMsg?.obj as? WebView.WebViewTransport
-                    transport?.webView = tempWebView
+                    transport?.webView = popupWebView
                     resultMsg?.sendToTarget()
                     return true
                 }
@@ -2100,6 +2117,7 @@ class MainActivity : AppCompatActivity() {
     // ==================== 核心功能 ====================
 
     private fun loadUrl(url: String) {
+        Log.d("OAuthDebug", "loadUrl called url=$url")
         if (url.isEmpty()) return
         showWebView()
         activeTab?.webView?.loadUrl(url)
@@ -2182,6 +2200,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showHomePage() {
+        Log.d("OAuthDebug", "showHomePage called", Throwable())
         isShowingWebView = false
         binding.webViewContainer.visibility = View.GONE
         binding.speedDialContainer.visibility = View.VISIBLE
