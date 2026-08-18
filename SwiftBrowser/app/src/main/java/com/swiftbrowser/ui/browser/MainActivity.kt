@@ -803,7 +803,7 @@ class MainActivity : AppCompatActivity() {
                             "if(v.videoWidth>0&&v.videoHeight>0)return v.videoWidth+','+v.videoHeight;}" +
                             "return '';})();"
                         ) { result ->
-                            val cleaned = result?.trim('"') ?: ""
+                            val cleaned = result?.removePrefix("\"")?.removeSuffix("\"") ?: ""
                             val parts = cleaned.split(",")
                             val w = parts.getOrNull(0)?.toIntOrNull() ?: 0
                             val h = parts.getOrNull(1)?.toIntOrNull() ?: 0
@@ -849,7 +849,7 @@ class MainActivity : AppCompatActivity() {
                     // 导致系统选择器按 MIME 过滤（如 .srt 这种 MimeTypeMap 没注册的扩展名会被置灰）。
                     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
-                        type = "*/*"
+                        type = '*/*'
                         if (fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
                             putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                         }
