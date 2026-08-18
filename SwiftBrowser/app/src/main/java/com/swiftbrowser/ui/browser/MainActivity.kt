@@ -105,10 +105,8 @@ class MainActivity : AppCompatActivity() {
         get() = prefs.getBoolean("desktop_mode_enabled", false)
         set(value) { prefs.edit().putBoolean("desktop_mode_enabled", value).apply() }
 
-    // 放大字体模式：只放大字号（不整体缩放画面），依赖网页自适应宽度自动屏内换行，避免横向溢出
-    private var bigFontModeEnabled: Boolean
-        get() = prefs.getBoolean("big_font_mode_enabled", false)
-        set(value) { prefs.edit().putBoolean("big_font_mode_enabled", value).apply() }
+    // 放大字体模式：只放大字号（不整体缩放画面），依赖网页自适应宽度自动屏内换行，避免横向溢出。
+    // 每个标签页独立开关（存于 Tab.bigFontModeEnabled），不做全局统一配置。
     // 缓存的移动版（默认）User-Agent，用于在桌面/普通模式间切换
     private val mobileUserAgent: String by lazy {
         WebSettings.getDefaultUserAgent(this).replace("; wv", "")
@@ -580,8 +578,9 @@ class MainActivity : AppCompatActivity() {
             // 不会触发下面的 onCreateWindow，弹窗请求会被 WebView 直接丢弃
             settings.javaScriptCanOpenWindowsAutomatically = true
             settings.setSupportMultipleWindows(true)
-            // 缩放模式：放大字体模式下关闭原生画面缩放，改由 SelectionWebView 接管双指手势调节字号
-            applyBigFontMode(this, bigFontModeEnabled)
+            // 缩放模式：放大字体模式下关闭原生画面缩放，改由 SelectionWebView 接管双指手势调节字号。
+            // 新标签页默认关闭，与其他标签页的开关状态互相独立。
+            applyBigFontMode(this, false)
 
             // 伪装成普通浏览器，避免 Google 拒绝 WebView 中的 OAuth 登录
             // 同时根据当前是否为桌面模式设置 User-Agent
@@ -1059,7 +1058,7 @@ class MainActivity : AppCompatActivity() {
         )
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
-            if (bigFontModeEnabled) {
+            if (findTabByWebView(this)?.bigFontModeEnabled == true) {
                 fontZoomDetector.onTouchEvent(event)
             }
             return super.onTouchEvent(event)
@@ -1800,7 +1799,7 @@ class MainActivity : AppCompatActivity() {
             desktopModeItem.title = "桌面模式:" + if (desktopModeEnabled) "开" else "关"
 
             val bigFontModeItem = popup.menu.findItem(R.id.action_big_font_mode_toggle)
-            bigFontModeItem.title = "放大字体模式:" + if (bigFontModeEnabled) "开" else "关"
+            bigFontModeItem.title = "放大字体模式(当前标签):" + if (activeTab?.bigFontModeEnabled == true) "开" else "关"
 
             popup.setOnMenuItemClickListener { item ->
                 when (item.itemId) {
@@ -1904,15 +1903,18 @@ class MainActivity : AppCompatActivity() {
                         true
                     }
                     R.id.action_big_font_mode_toggle -> {
-                        bigFontModeEnabled = !bigFontModeEnabled
-                        Toast.makeText(
-                            this,
-                            "放大字体模式已" + if (bigFontModeEnabled) "开启（双指捏合可调节字号）" else "关闭",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                        // 对所有标签页实时生效，无需重新加载
-                        for (tab in tabs) {
-                            tab.webView?.let { applyBigFontMode(it, bigFontModeEnabled) }
+                        val tab = activeTab
+                        if (tab == null) {
+                            Toast.makeText(this, "请先浏览一个网页", Toast.LENGTH_SHORT).show()
+                        } else {
+                            tab.bigFontModeEnabled = !tab.bigFontModeEnabled
+                            Toast.makeText(
+                                this,
+                                "放大字体模式已" + if (tab.bigFontModeEnabled) "开启（双指捏合可调节字号，仅当前标签页）" else "关闭",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            // 只对当前标签页实时生效，其他标签页不受影响，无需重新加载
+                            tab.webView?.let { applyBigFontMode(it, tab.bigFontModeEnabled) }
                         }
                         true
                     }

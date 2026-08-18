@@ -11,5 +11,7 @@ data class Tab(
     var thumbnail: Bitmap? = null,
     // window.open() 弹窗标签页对应的发起标签页 id：弹窗执行 window.close()
     // （如 OAuth 登录流程结束时）应切回这个标签页，而不是留在已经没用的空白弹窗上
-    var openerTabId: Long? = null
+    var openerTabId: Long? = null,
+    // 放大字体模式：每个标签页独立开关，互不影响
+    var bigFontModeEnabled: Boolean = false
 )
