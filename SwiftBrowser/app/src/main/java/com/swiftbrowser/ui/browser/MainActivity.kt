@@ -27,6 +27,7 @@ import android.view.DragEvent
 import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.ViewConfiguration
 import android.util.Log
 import android.view.View
@@ -53,6 +54,7 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.PagerSnapHelper
 import androidx.recyclerview.widget.RecyclerView
+import kotlin.math.roundToInt
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftBrowserApp
 import com.swiftbrowser.data.entity.Bookmark
@@ -102,6 +104,11 @@ class MainActivity : AppCompatActivity() {
     private var desktopModeEnabled: Boolean
         get() = prefs.getBoolean("desktop_mode_enabled", false)
         set(value) { prefs.edit().putBoolean("desktop_mode_enabled", value).apply() }
+
+    // 放大字体模式：只放大字号（不整体缩放画面），依赖网页自适应宽度自动屏内换行，避免横向溢出
+    private var bigFontModeEnabled: Boolean
+        get() = prefs.getBoolean("big_font_mode_enabled", false)
+        set(value) { prefs.edit().putBoolean("big_font_mode_enabled", value).apply() }
     // 缓存的移动版（默认）User-Agent，用于在桌面/普通模式间切换
     private val mobileUserAgent: String by lazy {
         WebSettings.getDefaultUserAgent(this).replace("; wv", "")
@@ -154,6 +161,11 @@ class MainActivity : AppCompatActivity() {
         // 取 1024 是为了越过常见桌面断点（如 GitHub/Primer 的 lg=1012px），
         // 否则视口虽变宽但仍落在「平板/窄版」区间，显示不出完整桌面布局。
         private const val DESKTOP_WIDTH_PX = 1024
+        // 放大字体模式下的字号缩放比例（只放大字体，不整体缩放画面，网页会自动屏内换行）
+        private const val BIG_FONT_TEXT_ZOOM = 150
+        // 放大字体模式下双指捏合调节字号的上下限
+        private const val MIN_TEXT_ZOOM = 50
+        private const val MAX_TEXT_ZOOM = 300
     }
 
     // ==================== 多标签 ====================
@@ -557,9 +569,7 @@ class MainActivity : AppCompatActivity() {
             settings.domStorageEnabled = true
             settings.loadWithOverviewMode = true
             settings.useWideViewPort = true
-            settings.builtInZoomControls = true
             settings.displayZoomControls = false
-            settings.setSupportZoom(true)
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             settings.mediaPlaybackRequiresUserGesture = false
             settings.databaseEnabled = true
@@ -570,8 +580,8 @@ class MainActivity : AppCompatActivity() {
             // 不会触发下面的 onCreateWindow，弹窗请求会被 WebView 直接丢弃
             settings.javaScriptCanOpenWindowsAutomatically = true
             settings.setSupportMultipleWindows(true)
-            // 防止 WebView 字体跟随系统字体缩放
-            settings.textZoom = 100
+            // 缩放模式：放大字体模式下关闭原生画面缩放，改由 SelectionWebView 接管双指手势调节字号
+            applyBigFontMode(this, bigFontModeEnabled)
 
             // 伪装成普通浏览器，避免 Google 拒绝 WebView 中的 OAuth 登录
             // 同时根据当前是否为桌面模式设置 User-Agent
@@ -1025,6 +1035,36 @@ class MainActivity : AppCompatActivity() {
 
     // 继承 WebView 以定制文字选择菜单：把"有道翻译"挪到"复制"紧后面
     private inner class SelectionWebView(context: Context) : WebView(context) {
+        // 放大字体模式下接管双指捏合手势：只调节 textZoom（字号），不整体缩放画面，
+        // 网页靠自适应宽度自动屏内换行，避免横向溢出（原生画面缩放此时已在 applyBigFontMode 中关闭）
+        private var pinchStartTextZoom = 100
+        private val fontZoomDetector = ScaleGestureDetector(
+            context,
+            object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+                    pinchStartTextZoom = settings.textZoom
+                    return true
+                }
+
+                override fun onScale(detector: ScaleGestureDetector): Boolean {
+                    val newZoom = (pinchStartTextZoom * detector.scaleFactor)
+                        .roundToInt()
+                        .coerceIn(MIN_TEXT_ZOOM, MAX_TEXT_ZOOM)
+                    if (newZoom != settings.textZoom) {
+                        settings.textZoom = newZoom
+                    }
+                    return true
+                }
+            }
+        )
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            if (bigFontModeEnabled) {
+                fontZoomDetector.onTouchEvent(event)
+            }
+            return super.onTouchEvent(event)
+        }
+
         override fun startActionMode(callback: ActionMode.Callback?): ActionMode? =
             super.startActionMode(wrapCallback(callback))
 
@@ -1759,6 +1799,9 @@ class MainActivity : AppCompatActivity() {
             val desktopModeItem = popup.menu.findItem(R.id.action_desktop_mode_toggle)
             desktopModeItem.title = "桌面模式:" + if (desktopModeEnabled) "开" else "关"
 
+            val bigFontModeItem = popup.menu.findItem(R.id.action_big_font_mode_toggle)
+            bigFontModeItem.title = "放大字体模式:" + if (bigFontModeEnabled) "开" else "关"
+
             popup.setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     R.id.action_find_in_page -> {
@@ -1857,6 +1900,19 @@ class MainActivity : AppCompatActivity() {
                                 applyDesktopMode(webView, desktopModeEnabled)
                                 webView.reload()
                             }
+                        }
+                        true
+                    }
+                    R.id.action_big_font_mode_toggle -> {
+                        bigFontModeEnabled = !bigFontModeEnabled
+                        Toast.makeText(
+                            this,
+                            "放大字体模式已" + if (bigFontModeEnabled) "开启（双指捏合可调节字号）" else "关闭",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        // 对所有标签页实时生效，无需重新加载
+                        for (tab in tabs) {
+                            tab.webView?.let { applyBigFontMode(it, bigFontModeEnabled) }
                         }
                         true
                     }
@@ -1998,6 +2054,18 @@ class MainActivity : AppCompatActivity() {
         // 两种模式都保持宽视口与缩略概览，确保页面正确适配
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
+    }
+
+    /**
+     * 放大字体模式：关闭系统原生的画面级双指缩放（会导致横向溢出、需要左右滑动），
+     * 改由 SelectionWebView 自己接管双指手势，只调节 textZoom（字号），
+     * 依赖网页自适应宽度，放大后文字仍在屏内自动换行。
+     */
+    private fun applyBigFontMode(webView: WebView, enabled: Boolean) {
+        val settings = webView.settings
+        settings.textZoom = if (enabled) BIG_FONT_TEXT_ZOOM else 100
+        settings.setSupportZoom(!enabled)
+        settings.builtInZoomControls = !enabled
     }
 
     /**

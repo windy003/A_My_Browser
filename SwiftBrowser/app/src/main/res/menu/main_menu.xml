@@ -57,6 +57,10 @@
         android:icon="@drawable/ic_search"
         android:title="桌面模式:关" />
     <item
+        android:id="@+id/action_big_font_mode_toggle"
+        android:icon="@drawable/ic_edit"
+        android:title="放大字体模式:关" />
+    <item
         android:id="@+id/action_login"
         android:icon="@drawable/ic_person"
         android:title="@string/sign_in" />
