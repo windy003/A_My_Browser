@@ -849,7 +849,7 @@ class MainActivity : AppCompatActivity() {
                     // 导致系统选择器按 MIME 过滤（如 .srt 这种 MimeTypeMap 没注册的扩展名会被置灰）。
                     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
-                        type = '*/*'
+                        type = "*/*"
                         if (fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
                             putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                         }
