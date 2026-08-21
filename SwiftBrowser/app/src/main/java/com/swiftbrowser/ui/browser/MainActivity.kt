@@ -430,7 +430,7 @@ class MainActivity : AppCompatActivity() {
 
     // ==================== 标签状态持久化（关闭 App 后恢复上次所有标签） ====================
 
-    /** 把当前所有标签的 URL 及活跃标签下标存入 SharedPreferences */
+    /** 把当前所有标签的 URL、标题及阅读进度（滚动位置）存入 SharedPreferences */
     private fun saveTabsState() {
         try {
             val arr = org.json.JSONArray()
@@ -438,6 +438,7 @@ class MainActivity : AppCompatActivity() {
                 val obj = org.json.JSONObject()
                 obj.put("url", tab.url ?: org.json.JSONObject.NULL)
                 obj.put("title", tab.title ?: org.json.JSONObject.NULL)
+                obj.put("scrollY", tab.webView?.scrollY ?: 0)
                 arr.put(obj)
             }
             prefs.edit()
@@ -457,10 +458,12 @@ class MainActivity : AppCompatActivity() {
                 val obj = arr.getJSONObject(i)
                 val url = if (obj.isNull("url")) null else obj.optString("url").takeIf { it.isNotEmpty() }
                 val title = if (obj.isNull("title")) null else obj.optString("title").takeIf { it.isNotEmpty() }
+                val scrollY = obj.optInt("scrollY", 0)
                 val tab = Tab()
                 tab.webView = createWebView()
                 tab.url = url
                 tab.title = title
+                if (scrollY > 0) tab.pendingScrollRestore = scrollY
                 tabs.add(tab)
                 if (url != null) tab.webView?.loadUrl(url)
             }
@@ -621,6 +624,13 @@ class MainActivity : AppCompatActivity() {
                     if (tab == activeTab) {
                         binding.etUrl.setText(url)
                         binding.progressBar.visibility = View.GONE
+                    }
+                    // 恢复上次退出前保存的阅读进度（仅消费一次，避免后续跳转/刷新被误恢复）
+                    tab.pendingScrollRestore?.let { restoreY ->
+                        tab.pendingScrollRestore = null
+                        // 延迟一小段时间再滚动：onPageFinished 触发时长文档可能还未完成排版，
+                        // 立即 scrollTo 会因为内容高度不够而被钳制回顶部
+                        view?.postDelayed({ view.scrollTo(0, restoreY) }, 150)
                     }
                     // 记录历史
                     if (url != null && url != "about:blank") {

@@ -13,5 +13,7 @@ data class Tab(
     // （如 OAuth 登录流程结束时）应切回这个标签页，而不是留在已经没用的空白弹窗上
     var openerTabId: Long? = null,
     // 放大字体模式：每个标签页独立开关，互不影响
-    var bigFontModeEnabled: Boolean = false
+    var bigFontModeEnabled: Boolean = false,
+    // 从上次退出前恢复的阅读进度（纵向滚动像素）；页面加载完成后消费一次即清空
+    var pendingScrollRestore: Int? = null
 )
