@@ -360,6 +360,11 @@ class MainActivity : AppCompatActivity() {
         binding.webViewContainer.removeAllViews()
         tab.webView?.let { binding.webViewContainer.addView(it) }
 
+        // 阅读进度条状态属于具体标签，切换后先重置，再用新标签当前滚动位置重新同步
+        // （切换后 WebView 高度可能要等下一次布局才能取到，post 一帧再读取）
+        binding.scrollProgressBar.reset()
+        tab.webView?.let { wv -> wv.post { if (activeTab == tab) updateScrollProgressBar(wv) } }
+
         // 标签面板打开时只切换底层内容，不关闭面板
         if (binding.tabOverlay.visibility == View.VISIBLE) {
             binding.etUrl.setText(tab.url ?: "")
@@ -1074,6 +1079,13 @@ class MainActivity : AppCompatActivity() {
             return super.onTouchEvent(event)
         }
 
+        override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
+            super.onScrollChanged(l, t, oldl, oldt)
+            if (findTabByWebView(this) == activeTab) {
+                updateScrollProgressBar(this)
+            }
+        }
+
         override fun startActionMode(callback: ActionMode.Callback?): ActionMode? =
             super.startActionMode(wrapCallback(callback))
 
@@ -1730,6 +1742,15 @@ class MainActivity : AppCompatActivity() {
         // 在底部工具栏左右滑动切换标签：左滑→下一个，右滑→上一个
         binding.bottomBar.onSwipeLeft = { switchToAdjacentTab(forward = true) }
         binding.bottomBar.onSwipeRight = { switchToAdjacentTab(forward = false) }
+
+        // 拖动右侧阅读进度条：按比例直接跳转当前标签的 WebView 滚动位置
+        binding.scrollProgressBar.onDragTo = { progress ->
+            activeTab?.webView?.let { wv ->
+                val contentHeightPx = (wv.contentHeight * wv.scale).roundToInt()
+                val maxScroll = (contentHeightPx - wv.height).coerceAtLeast(0)
+                wv.scrollTo(0, (maxScroll * progress).roundToInt())
+            }
+        }
     }
 
     /** 切换到相邻标签；到达两端不循环。 */
@@ -2274,6 +2295,7 @@ class MainActivity : AppCompatActivity() {
     private fun showWebView() {
         isShowingWebView = true
         binding.webViewContainer.visibility = View.VISIBLE
+        binding.scrollProgressBar.visibility = View.VISIBLE
         binding.speedDialContainer.visibility = View.GONE
         if (speedDialAdapter.hasLifted()) speedDialAdapter.clearLift()
         hideTabOverlay()
@@ -2283,11 +2305,19 @@ class MainActivity : AppCompatActivity() {
         Log.d("OAuthDebug", "showHomePage called", Throwable())
         isShowingWebView = false
         binding.webViewContainer.visibility = View.GONE
+        binding.scrollProgressBar.visibility = View.GONE
+        binding.scrollProgressBar.reset()
         binding.speedDialContainer.visibility = View.VISIBLE
         binding.etUrl.setText("")
         hideTabOverlay()
         // 回到首页时确保工具栏可见
         if (isToolbarHidden) showToolbar()
+    }
+
+    // 根据 WebView 当前滚动位置/内容高度刷新右侧阅读进度条
+    private fun updateScrollProgressBar(webView: WebView) {
+        val contentHeightPx = (webView.contentHeight * webView.scale).roundToInt()
+        binding.scrollProgressBar.update(webView.scrollY, webView.height, contentHeightPx)
     }
 
     private fun hideToolbar() {

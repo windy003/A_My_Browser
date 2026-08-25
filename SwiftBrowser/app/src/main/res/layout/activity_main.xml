@@ -156,6 +156,14 @@
                 android:layout_height="match_parent"
                 android:visibility="gone" />
 
+            <!-- 阅读进度条：贴右侧，随网页滚动展示位置，静止时细、滚动时变粗，可拖动快速跳转 -->
+            <com.swiftbrowser.ui.browser.ScrollProgressBar
+                android:id="@+id/scrollProgressBar"
+                android:layout_width="24dp"
+                android:layout_height="match_parent"
+                android:layout_gravity="end"
+                android:visibility="gone" />
+
             <!-- 快速拨号首页 -->
             <LinearLayout
                 android:id="@+id/speedDialContainer"
