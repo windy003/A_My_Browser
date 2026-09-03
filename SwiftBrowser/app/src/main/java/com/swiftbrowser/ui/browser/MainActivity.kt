@@ -368,16 +368,16 @@ class MainActivity : AppCompatActivity() {
         // 标签面板打开时只切换底层内容，不关闭面板
         if (binding.tabOverlay.visibility == View.VISIBLE) {
             binding.etUrl.setText(tab.url ?: "")
-            isShowingWebView = tab.url != null
+            isShowingWebView = tab.url != null && !tab.homeOverWebPage
             return
         }
 
-        // 更新地址栏
-        if (tab.url != null) {
+        // 更新地址栏；标签停在首页（首页作为历史记录）时切回来仍显示首页
+        if (tab.url != null && !tab.homeOverWebPage) {
             binding.etUrl.setText(tab.url)
             showWebView()
         } else {
-            showHomePage()
+            showHomePage(fromWebPage = tab.homeOverWebPage)
         }
     }
 
@@ -1715,21 +1715,25 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupBottomBar() {
         binding.btnBack.setOnClickListener {
-            activeTab?.webView?.let { if (it.canGoBack()) it.goBack() }
+            // 首页被当作历史中的一页：在首页时后退回到进入首页前浏览的网页
+            if (!isShowingWebView) {
+                restoreWebPageFromHome()
+            } else {
+                activeTab?.webView?.let { if (it.canGoBack()) it.goBack() }
+            }
         }
 
         binding.btnForward.setOnClickListener {
-            val url = activeTab?.url
-            if (!isShowingWebView && url != null && url != "about:blank") {
-                // 在快速拨号页时，前进键恢复到当前标签之前浏览的页面
-                binding.etUrl.setText(url)
-                showWebView()
-            } else {
+            if (isShowingWebView) {
                 activeTab?.webView?.let { if (it.canGoForward()) it.goForward() }
             }
         }
 
-        binding.btnHome.setOnClickListener { showHomePage() }
+        binding.btnHome.setOnClickListener {
+            // 从网页进入首页时，把首页记成当前网页之上的一条历史记录
+            val url = activeTab?.url
+            showHomePage(fromWebPage = isShowingWebView && url != null && url != "about:blank")
+        }
 
         // 底部新建标签按钮：新建一个标签页并显示主页
         binding.btnNewTabBottom.setOnClickListener { createNewTab() }
@@ -2292,8 +2296,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 首页作为历史中的一页时，后退回到进入首页前浏览的网页。
+     * @return 是否成功恢复；false 表示当前首页并不是从网页进来的
+     */
+    private fun restoreWebPageFromHome(): Boolean {
+        val tab = activeTab ?: return false
+        val url = tab.url
+        if (!tab.homeOverWebPage || url == null || url == "about:blank") return false
+        binding.etUrl.setText(url)
+        showWebView()
+        return true
+    }
+
     private fun showWebView() {
         isShowingWebView = true
+        // 已经回到网页，首页那条历史记录就消费掉了
+        activeTab?.homeOverWebPage = false
         binding.webViewContainer.visibility = View.VISIBLE
         binding.scrollProgressBar.visibility = View.VISIBLE
         binding.speedDialContainer.visibility = View.GONE
@@ -2301,8 +2320,9 @@ class MainActivity : AppCompatActivity() {
         hideTabOverlay()
     }
 
-    private fun showHomePage() {
+    private fun showHomePage(fromWebPage: Boolean = false) {
         Log.d("OAuthDebug", "showHomePage called", Throwable())
+        activeTab?.homeOverWebPage = fromWebPage
         isShowingWebView = false
         binding.webViewContainer.visibility = View.GONE
         binding.scrollProgressBar.visibility = View.GONE
@@ -2761,6 +2781,8 @@ class MainActivity : AppCompatActivity() {
             speedDialAdapter.exitBatchDeleteMode()
         } else if (binding.tabOverlay.visibility == View.VISIBLE) {
             hideTabOverlay()
+        } else if (!isShowingWebView && restoreWebPageFromHome()) {
+            // 首页作为历史中的一页：返回键回到进入首页前浏览的网页
         } else if (isShowingWebView && activeTab?.webView?.canGoBack() == true) {
             activeTab?.webView?.goBack()
         } else if (isShowingWebView) {
