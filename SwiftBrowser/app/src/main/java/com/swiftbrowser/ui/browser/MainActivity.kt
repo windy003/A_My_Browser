@@ -1325,6 +1325,7 @@ class MainActivity : AppCompatActivity() {
             onRenameFolder = { folder -> showRenameFolderDialog(folder) },
             onStartDrag = { viewHolder -> itemTouchHelper.startDrag(viewHolder) },
             onBatchDelete = { bookmark -> confirmDeleteSpeedDial(bookmark) },
+            onRefreshSite = { bookmark -> refreshSingleSpeedDialIcon(bookmark) },
             onShowLiftMenu = { anchor, actions -> showLiftMenu(anchor, actions, speedDialAdapter) },
             onHideLiftMenu = { hideLiftMenuView() }
         )
@@ -1517,6 +1518,7 @@ class MainActivity : AppCompatActivity() {
                 lifecycleScope.launch { bookmarkDao.moveTo(bookmark.id, app.speedDialFolderId) }
             },
             onStartDrag = { viewHolder -> folderItemTouchHelper?.startDrag(viewHolder) },
+            onRefreshSite = { bookmark -> refreshSingleSpeedDialIcon(bookmark) },
             onShowLiftMenu = { anchor, actions -> showLiftMenu(anchor, actions, folderAdapter) },
             onHideLiftMenu = { hideLiftMenuView() }
         )
@@ -2055,6 +2057,31 @@ class MainActivity : AppCompatActivity() {
             speedDialAdapter.notifyDataSetChanged()
             Toast.makeText(this@MainActivity, "图标已刷新", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    /**
+     * 单独刷新一个快速拨号的图标（长按 →「刷新此快速拨号」）。
+     * 只清这一个站点的缓存并标记它需要联网重取，其余快速拨号不受影响。
+     */
+    private fun refreshSingleSpeedDialIcon(bookmark: Bookmark) {
+        val url = bookmark.url
+        if (url.isNullOrEmpty()) {
+            Toast.makeText(this, "该项没有网址，无法刷新", Toast.LENGTH_SHORT).show()
+            return
+        }
+        // 只清这个站点解析出来的 <link> 图标地址，让刷新时重新解析网页
+        FaviconProvider.clearLinkIconCacheFor(url)
+        FaviconProvider.markForceRefresh(url)
+        // 重绑对应条目触发重新加载。联网重取的标记只会被消费一次，所以要先重绑用户正看着的那个列表：
+        // 在文件夹弹层里刷新时，等图标下载落盘后再重绑根列表，让文件夹缩略图也读到新图标
+        val inFolderOverlay = binding.folderOverlay.visibility == View.VISIBLE &&
+                ::folderAdapter.isInitialized && folderAdapter.rebindBookmark(bookmark.id)
+        if (inFolderOverlay) {
+            binding.rvSpeedDial.postDelayed({ speedDialAdapter.rebindBookmark(bookmark.id) }, 3000)
+        } else if (!speedDialAdapter.rebindBookmark(bookmark.id)) {
+            speedDialAdapter.notifyDataSetChanged()
+        }
+        Toast.makeText(this, "正在刷新图标…", Toast.LENGTH_SHORT).show()
     }
 
     // ==================== 繁转简 ====================

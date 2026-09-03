@@ -9,6 +9,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import com.caverock.androidsvg.SVG
 import com.bumptech.glide.Glide
+import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.bumptech.glide.load.resource.bitmap.CenterCrop
 import com.bumptech.glide.load.resource.bitmap.RoundedCorners
 import com.bumptech.glide.signature.ObjectKey
@@ -130,6 +131,24 @@ object FaviconProvider {
     fun beginForceRefresh(urls: Collection<String>) {
         pendingRefreshKeys.clear()
         urls.forEach { url -> extractPageKey(url)?.let { pendingRefreshKeys.add(it) } }
+    }
+
+    /**
+     * 只标记单个 URL 下一次加载时联网重取（长按某个快速拨号 →「刷新此快速拨号」）。
+     * 与 [beginForceRefresh] 不同，这里不清空已有标记，也不影响其它站点的缓存。
+     */
+    fun markForceRefresh(url: String) {
+        extractPageKey(url)?.let { pendingRefreshKeys.add(it) }
+    }
+
+    /**
+     * 清除单个 URL 的 link 图标解析缓存（内存 + 持久化），
+     * 让它刷新时重新去网页的 <head> 里解析图标地址，而不是沿用旧结果。
+     */
+    fun clearLinkIconCacheFor(url: String) {
+        val pageKey = extractPageKey(url) ?: return
+        linkIconCache.remove(pageKey)
+        prefs?.edit()?.remove(pageKey)?.apply()
     }
 
     /**
@@ -460,10 +479,25 @@ object FaviconProvider {
                 if (iconFile != null) persistIconBitmap(best, iconFile)
                 Glide.with(imageView.context)
                     .load(best)
+                    // 刚下载到的新图，不能让 Glide 拿内存里同 key 的旧结果顶替
+                    .diskCacheStrategy(DiskCacheStrategy.NONE)
+                    .skipMemoryCache(true)
                     .apply {
                         if (isSpeedDial) transform(CenterCrop(), RoundedCorners(ICON_CORNER_PX))
                         else circleCrop()
                     }
+                    .into(imageView)
+            } else if (iconFile != null && iconFile.exists()) {
+                // 刷新失败（无网络/图标源都取不到）时退回已存的本地图标，不要变成默认图标
+                Glide.with(imageView.context)
+                    .load(iconFile)
+                    .signature(ObjectKey(iconFile.lastModified()))
+                    .apply {
+                        if (isSpeedDial) transform(CenterCrop(), RoundedCorners(ICON_CORNER_PX))
+                        else circleCrop()
+                    }
+                    .placeholder(defaultRes)
+                    .error(defaultRes)
                     .into(imageView)
             } else {
                 imageView.setImageResource(defaultRes)
@@ -503,13 +537,19 @@ object FaviconProvider {
                 .maxByOrNull { it.width.toLong() * it.height.toLong() }
         }
 
-    /** 以原始尺寸下载单张图，返回一份独立副本；失败或超时返回 null。SVG 会栅格化成高清位图 */
+    /**
+     * 以原始尺寸下载单张图，返回一份独立副本；失败或超时返回 null。SVG 会栅格化成高清位图。
+     * 刷新场景必须绕过 Glide 的内存/磁盘缓存，否则拿回来的还是上次那张旧图，看起来"刷了没反应"。
+     */
     private fun downloadOriginalBitmap(context: Context, url: String): Bitmap? {
         // SVG 矢量图 Glide 默认解不了，单独用 androidsvg 渲染成高分辨率位图
         if (url.substringBefore('?').endsWith(".svg", ignoreCase = true)) {
             return downloadSvgAsBitmap(url)
         }
-        val target = Glide.with(context).asBitmap().load(url).submit()
+        val target = Glide.with(context).asBitmap().load(url)
+            .diskCacheStrategy(DiskCacheStrategy.NONE)
+            .skipMemoryCache(true)
+            .submit()
         return try {
             val bmp = target.get(ICON_DOWNLOAD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             // Glide 返回的 bitmap 属于其 BitmapPool，复制一份独立的以便安全地比较/保存/显示

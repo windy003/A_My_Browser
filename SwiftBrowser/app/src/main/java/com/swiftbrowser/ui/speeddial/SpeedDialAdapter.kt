@@ -33,6 +33,8 @@ class SpeedDialAdapter(
     private val onMoveOutSite: ((Bookmark) -> Unit)? = null,
     private val onStartDrag: ((RecyclerView.ViewHolder) -> Unit)? = null,
     private val onBatchDelete: (Bookmark) -> Unit = {},
+    // 单独刷新某个快速拨号的图标
+    private val onRefreshSite: (Bookmark) -> Unit = {},
     // 提起时在锚点附近弹出大菜单 / 退出提起时收起菜单，由外部（Activity）实现
     private val onShowLiftMenu: (anchor: View, actions: List<LiftAction>) -> Unit = { _, _ -> },
     private val onHideLiftMenu: () -> Unit = {}
@@ -64,6 +66,24 @@ class SpeedDialAdapter(
 
     /** 获取当前显示用的列表（拖拽中返回重排后的副本，否则返回原始列表） */
     fun getDisplayList(): List<SpeedDialItem> = dragOrderList ?: currentList
+
+    /**
+     * 重新绑定某个书签所在的条目（单独刷新图标时用）。
+     * 站点直接命中；若它是文件夹里的子项，则重绑该文件夹（缩略图里也含它的图标）。
+     * @return 是否找到并通知了对应条目
+     */
+    fun rebindBookmark(bookmarkId: Long): Boolean {
+        val index = getDisplayList().indexOfFirst { item ->
+            when (item) {
+                is SpeedDialItem.Site -> item.bookmark.id == bookmarkId
+                is SpeedDialItem.Folder ->
+                    item.folder.id == bookmarkId || item.children.any { it.id == bookmarkId }
+            }
+        }
+        if (index < 0) return false
+        notifyItemChanged(index)
+        return true
+    }
 
     /** 开始拖拽重排：复制当前列表 */
     fun startDragReorder() {
@@ -313,6 +333,7 @@ class SpeedDialAdapter(
         private fun buildSiteActions(bookmark: Bookmark): List<LiftAction> {
             val actions = mutableListOf<LiftAction>()
             actions.add(LiftAction("重命名") { onRenameSite(bookmark) })
+            actions.add(LiftAction("刷新此快速拨号") { onRefreshSite(bookmark) })
             onMoveOutSite?.let { mo ->
                 actions.add(LiftAction("移出文件夹") { mo(bookmark) })
             }
