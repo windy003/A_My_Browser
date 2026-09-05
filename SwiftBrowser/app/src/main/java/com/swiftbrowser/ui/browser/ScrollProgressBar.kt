@@ -13,7 +13,8 @@ import kotlin.math.roundToInt
 
 /**
  * 网页阅读进度条：贴在屏幕右侧，随 WebView 滚动同步显示当前位置；
- * 静止时收成一条细线，滚动或拖动时变粗便于抓取；可直接拖动快速跳转到页面任意位置。
+ * 静止时收成一条细线，滚动或拖动时变粗便于抓取；只有按住滑块本身拖动才会跳转，
+ * 点击/按压滑块以外的轨道区域不做任何响应（事件透传给下面的网页）。
  */
 class ScrollProgressBar @JvmOverloads constructor(
     context: Context,
@@ -35,6 +36,8 @@ class ScrollProgressBar @JvmOverloads constructor(
     private var visibleRatio = 1f       // 可视区域占内容总高度比例，决定滑块长度
     private var dragging = false
     private var hasContent = false      // 内容是否足够长可滚动，不可滚动时不绘制也不拦截触摸
+    private var dragOffsetInThumb = 0f  // 按下点相对滑块顶部的偏移，保证拖动时滑块不跳动
+    private val thumbTouchSlopPx = 12f * density  // 滑块上下各放宽一点，细线状态下也便于按住
 
     private val thumbPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = ContextCompat.getColor(context, R.color.accent)
@@ -90,9 +93,8 @@ class ScrollProgressBar @JvmOverloads constructor(
         super.onDraw(canvas)
         if (!hasContent) return
         val barWidth = collapsedWidthPx + (expandedWidthPx - collapsedWidthPx) * widthFraction
-        val thumbHeight = (height * visibleRatio).coerceAtLeast(minThumbHeightPx).coerceAtMost(height.toFloat())
-        val trackHeight = height - thumbHeight
-        val thumbTop = trackHeight * progress
+        val thumbHeight = currentThumbHeight()
+        val thumbTop = currentThumbTop()
         val left = width - barWidth
         thumbPaint.alpha = (140 + 115 * widthFraction).roundToInt().coerceIn(0, 255)
         canvas.drawRoundRect(
@@ -105,14 +107,24 @@ class ScrollProgressBar @JvmOverloads constructor(
         if (!hasContent) return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // 只有按在滑块上才接管手势；按在空白轨道上直接放弃事件，不做点击跳转
+                val thumbTop = currentThumbTop()
+                val thumbBottom = thumbTop + currentThumbHeight()
+                if (event.y < thumbTop - thumbTouchSlopPx || event.y > thumbBottom + thumbTouchSlopPx) {
+                    return false
+                }
                 dragging = true
+                dragOffsetInThumb = event.y - thumbTop
                 removeCallbacks(hideRunnable)
                 animateWidth(expand = true)
-                moveThumbTo(event.y)
                 parent?.requestDisallowInterceptTouchEvent(true)
             }
-            MotionEvent.ACTION_MOVE -> moveThumbTo(event.y)
+            MotionEvent.ACTION_MOVE -> {
+                if (!dragging) return false
+                moveThumbTo(event.y)
+            }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!dragging) return false
                 dragging = false
                 postDelayed(hideRunnable, hideDelayMs)
                 parent?.requestDisallowInterceptTouchEvent(false)
@@ -121,10 +133,17 @@ class ScrollProgressBar @JvmOverloads constructor(
         return true
     }
 
+    private fun currentThumbHeight(): Float =
+        (height * visibleRatio).coerceAtLeast(minThumbHeightPx).coerceAtMost(height.toFloat())
+
+    private fun currentThumbTop(): Float =
+        (height - currentThumbHeight()).coerceAtLeast(0f) * progress
+
+    /** 按住滑块拖动：保持手指与滑块的相对位置，滑块不会跳到手指中心 */
     private fun moveThumbTo(y: Float) {
-        val thumbHeight = (height * visibleRatio).coerceAtLeast(minThumbHeightPx).coerceAtMost(height.toFloat())
+        val thumbHeight = currentThumbHeight()
         val trackHeight = (height - thumbHeight).coerceAtLeast(1f)
-        val thumbTop = (y - thumbHeight / 2f).coerceIn(0f, trackHeight)
+        val thumbTop = (y - dragOffsetInThumb).coerceIn(0f, trackHeight)
         progress = thumbTop / trackHeight
         invalidate()
         onDragTo?.invoke(progress)
