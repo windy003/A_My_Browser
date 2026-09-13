@@ -107,9 +107,24 @@ class MainActivity : AppCompatActivity() {
 
     // 放大字体模式：只放大字号（不整体缩放画面），依赖网页自适应宽度自动屏内换行，避免横向溢出。
     // 每个标签页独立开关（存于 Tab.bigFontModeEnabled），不做全局统一配置。
-    // 缓存的移动版（默认）User-Agent，用于在桌面/普通模式间切换
+    // 系统 WebView 内核的 Chrome 主版本号，用于拼出与真实 Chrome 一致的 User-Agent
+    private val chromeMajorVersion: String by lazy {
+        Regex("Chrome/(\\d+)")
+            .find(WebSettings.getDefaultUserAgent(this))?.groupValues?.get(1) ?: "131"
+    }
+    // 移动版（默认）User-Agent，用于在桌面/普通模式间切换。
+    // 这里直接拼出 Chrome Android 的 reduced UA，而不是在系统 WebView UA 上删 "; wv"——
+    // 只删 "; wv" 会残留 "Version/4.0"（WebView 独有）、"Build/xxx"、真实机型和完整版本号，
+    // Cloudflare 这类风控一眼就能认出不是真 Chrome，导致 claude.ai 等站点直接返回拦截页。
+    // Chrome 110+ 的移动版 UA 已把机型统一写死成 "Android 10; K"、版本号统一成 "x.0.0.0"。
     private val mobileUserAgent: String by lazy {
-        WebSettings.getDefaultUserAgent(this).replace("; wv", "")
+        "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) " +
+            "Chrome/$chromeMajorVersion.0.0.0 Mobile Safari/537.36"
+    }
+    // 桌面版 User-Agent：与真实 Chrome on Linux 的 UA 完全一致
+    private val desktopUserAgent: String by lazy {
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+            "Chrome/$chromeMajorVersion.0.0.0 Safari/537.36"
     }
     // 桌面模式下为各 WebView 注册的 document-start 脚本句柄，用于关闭时移除
     private val desktopScripts = HashMap<WebView, ScriptHandler>()
@@ -2094,12 +2109,7 @@ class MainActivity : AppCompatActivity() {
     private fun applyDesktopMode(webView: WebView, enabled: Boolean) {
         val settings = webView.settings
         if (enabled) {
-            // 将移动版 UA 转换为桌面版：替换平台标识并去掉 "Mobile"
-            var ua = mobileUserAgent.replace(
-                Regex("\\(Linux; Android.*?\\)"), "(X11; Linux x86_64)"
-            )
-            ua = ua.replace(Regex("\\s*Mobile\\s*"), " ").trim()
-            settings.userAgentString = ua
+            settings.userAgentString = desktopUserAgent
 
             // 仅改 UA 对 GitHub 这类「响应式」网站无效——它们不看 UA，只看视口宽度，
             // 用 CSS @media 断点决定显示手机版还是桌面版布局。
