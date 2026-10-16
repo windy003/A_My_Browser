@@ -167,6 +167,117 @@ class MainActivity : AppCompatActivity() {
         """.trimIndent()
     }
 
+    // 「音量键翻页」注入脚本：让页面自己滚。
+    // Why: webView.scrollBy 只能滚 WebView 自身（主文档），而很多页面是
+    // html/body{overflow:hidden} + 内部 div 在滚，主文档没有滚动区间，scrollBy 会静默失效。
+    // 这里改成沿视口中心处的元素祖先链找「真正在滚」的容器再滚它。
+    // 返回 1=已滚动；0=找到了可滚动容器但该方向已到尽头；-1=完全找不到可滚动容器。
+    // 占位符 __DY__ 每次按键替换成带符号的位移（CSS px，正数向下滚）。
+    private val volumeScrollScript: String by lazy {
+        """
+        (function() {
+            var dy = __DY__;
+            var down = dy > 0;
+            var foundScroller = false;
+
+            function canScroll(el, win) {
+                if (!el || el.nodeType !== 1) return false;
+                if (el.scrollHeight - el.clientHeight <= 1) return false;
+                // 主文档滚动元素（html/body）默认 overflow:visible 也能滚，不能按 overflow 过滤
+                if (el === win.document.scrollingElement) return true;
+                var oy = win.getComputedStyle(el).overflowY;
+                return oy === 'auto' || oy === 'scroll' || oy === 'overlay';
+            }
+
+            // 该方向上还有没有滚动余量。
+            // 用余量判断而不是比较赋值前后的 scrollTop：容器若设了 scroll-behavior:smooth，
+            // scrollTop 赋值后不会立刻变化，会被误判成「没滚动」。
+            function hasRoom(el, win) {
+                return down ? (el.scrollTop + el.clientHeight < el.scrollHeight - 1)
+                            : (el.scrollTop > 0);
+            }
+
+            // 向上取父节点，穿透 Shadow DOM（父节点为空时跳到宿主元素）
+            function up(el) {
+                if (el.parentElement) return el.parentElement;
+                var root = el.getRootNode && el.getRootNode();
+                return root && root.host ? root.host : null;
+            }
+
+            function scrollIt(el) {
+                foundScroller = true;
+                el.scrollTop = el.scrollTop + dy;
+                return true;
+            }
+
+            // 从命中元素沿祖先链往上找最内层的可滚动容器（与真实滚轮的滚动链一致）
+            function tryChain(node, win) {
+                for (var el = node; el; el = up(el)) {
+                    if (!canScroll(el, win)) continue;
+                    foundScroller = true;
+                    if (hasRoom(el, win)) return scrollIt(el);
+                }
+                return false;
+            }
+
+            function tryDoc(win) {
+                var se = win.document.scrollingElement || win.document.documentElement;
+                if (!canScroll(se, win)) return false;
+                foundScroller = true;
+                if (!hasRoom(se, win)) return false;
+                win.scrollBy(0, dy);
+                return true;
+            }
+
+            function scrollInWindow(win) {
+                var doc = win.document;
+                if (!doc || !doc.body) return false;
+                var cx = win.innerWidth / 2, cy = win.innerHeight / 2;
+                // 用 elementsFromPoint 而不是 elementFromPoint：固定定位的广告/头部挡住中心点时，
+                // 还能拿到它下面的元素继续找滚动容器
+                var stack = doc.elementsFromPoint ? doc.elementsFromPoint(cx, cy) : null;
+                if (!stack) {
+                    var one = doc.elementFromPoint(cx, cy);
+                    stack = one ? [one] : [];
+                }
+                for (var i = 0; i < stack.length && i < 4; i++) {
+                    if (tryChain(stack[i], win)) return true;
+                }
+                if (tryDoc(win)) return true;
+                // 中心点落在同源 iframe 里：递归进去滚（跨域 iframe 读不到 document，交给原生兜底）
+                var frames = doc.querySelectorAll('iframe, frame');
+                for (var j = 0; j < frames.length; j++) {
+                    var r = frames[j].getBoundingClientRect();
+                    if (r.width < 1 || r.height < 1) continue;
+                    if (cx < r.left || cx > r.right || cy < r.top || cy > r.bottom) continue;
+                    try {
+                        var fw = frames[j].contentWindow;
+                        if (fw && fw.document && scrollInWindow(fw)) return true;
+                    } catch (e) {}
+                }
+                return false;
+            }
+
+            // 兜底：中心附近没找到滚动容器时，扫一遍常见容器，滚可见面积最大的那个
+            function scanWindow(win) {
+                var els = win.document.querySelectorAll('div,main,section,article,aside,ul,ol,table,form,body');
+                var best = null, bestArea = 0;
+                for (var i = 0; i < els.length; i++) {
+                    var el = els[i];
+                    if (el.clientHeight < 80 || !canScroll(el, win) || !hasRoom(el, win)) continue;
+                    var area = el.clientWidth * el.clientHeight;
+                    if (area > bestArea) { bestArea = area; best = el; }
+                }
+                return best ? scrollIt(best) : false;
+            }
+
+            if (scrollInWindow(window)) return 1;
+            if (!foundScroller && scanWindow(window)) return 1;
+            return foundScroller ? 0 : -1;
+        })()
+        """.trimIndent()
+    }
+
     companion object {
         private const val MENU_ID_YOUDAO = 0x59440001
         private const val YOUDAO_PACKAGE = "com.youdao.dict"
@@ -2736,6 +2847,7 @@ class MainActivity : AppCompatActivity() {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                 valueLabel.text = "当前：" + describe(progress)
             }
+
             override fun onStartTrackingTouch(sb: SeekBar?) {}
             override fun onStopTrackingTouch(sb: SeekBar?) {}
         })
@@ -2758,20 +2870,40 @@ class MainActivity : AppCompatActivity() {
         return oneLinePx + ((fullScreen - oneLinePx) * volumeScrollRatio).toInt()
     }
 
+    /**
+     * 音量键翻页（默认路径）：交给页面自己滚。
+     *
+     * Why: webView.scrollBy 只能滚 WebView 自身（主文档），遇到 html/body{overflow:hidden}
+     * 而由内部 div 滚动的页面（SPA、Twitter/X、各种文档站）就完全没反应。这里注入脚本让页面
+     * 找出真正在滚的那个元素来滚，覆盖这类页面。
+     *
+     * @param dyDevicePx 位移，正数向下滚，单位是设备像素（与 webView.scrollBy 一致）
+     */
+    private fun scrollByVolumeKey(webView: WebView, dyDevicePx: Int) {
+        // 页面 JS 的滚动单位是 CSS px，而 webView.scrollBy 用的是设备像素，必须换算，
+        // 否则注入的滚动距离会放大 density 倍（density 3 的机器上滚出 3 倍远）。
+        val dyCss = (dyDevicePx / resources.displayMetrics.density).roundToInt()
+        webView.evaluateJavascript(volumeScrollScript.replace("__DY__", dyCss.toString())) { result ->
+            // -1：页面里完全找不到可滚动容器；null：脚本没跑起来（JS 被关闭/调用失败）。
+            // 两种情况下都退回原生滚动兜底，保证不会比改动前更差。
+            if (result == null || result == "null" || result == "-1") {
+                webView.scrollBy(0, dyDevicePx)
+            }
+        }
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (volumeScrollEnabled && isShowingWebView && customView == null) {
             val webView = activeTab?.webView
-            if (webView != null) {
-                when (keyCode) {
-                    KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                        webView.scrollBy(0, computeVolumeScrollDistance(webView))
-                        return true
-                    }
-                    KeyEvent.KEYCODE_VOLUME_UP -> {
-                        webView.scrollBy(0, -computeVolumeScrollDistance(webView))
-                        return true
-                    }
-                }
+            val scrollDown = when (keyCode) {
+                KeyEvent.KEYCODE_VOLUME_DOWN -> true
+                KeyEvent.KEYCODE_VOLUME_UP -> false
+                else -> null
+            }
+            if (webView != null && scrollDown != null) {
+                val distance = computeVolumeScrollDistance(webView)
+                scrollByVolumeKey(webView, if (scrollDown) distance else -distance)
+                return true
             }
         }
         return super.onKeyDown(keyCode, event)
