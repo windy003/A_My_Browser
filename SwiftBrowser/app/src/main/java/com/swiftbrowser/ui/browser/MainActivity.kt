@@ -2011,7 +2011,12 @@ class MainActivity : AppCompatActivity() {
                         true
                     }
                     R.id.action_refresh_speed_dial -> {
-                        refreshSpeedDialIcons()
+                        AlertDialog.Builder(this, R.style.DialogTheme)
+                            .setTitle("刷新快速拨号")
+                            .setMessage("将清除图标缓存并重新联网获取所有快速拨号的图标，确定要刷新吗？")
+                            .setPositiveButton("确定") { _, _ -> refreshSpeedDialIcons() }
+                            .setNegativeButton(R.string.cancel, null)
+                            .show()
                         true
                     }
                     R.id.action_batch_delete -> {
