@@ -1,13 +1,18 @@
 package com.swiftbrowser.sync
 
 import android.content.Context
+import android.net.Uri
 import com.swiftbrowser.data.dao.BookmarkDao
 import com.swiftbrowser.data.entity.Bookmark
+import com.swiftbrowser.ui.browser.SiteProxyManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.URL
 
 class CloudSyncManager(
@@ -148,8 +153,27 @@ class CloudSyncManager(
 
     // ==================== 网络请求 ====================
 
+    /**
+     * 打开到云端 Worker 的连接。
+     *
+     * 书签同步必须走「站点代理设置」里的代理地址（默认 Clash 的 127.0.0.1:7890）：
+     * WebView 的 ProxyController 只影响 WebView，HttpURLConnection 不会读它，
+     * 所以这里给每个请求显式挂 Proxy。代理不可用时报错，不静默回退直连。
+     */
+    private fun openConnection(path: String): HttpURLConnection {
+        val url = URL(BASE_URL + path)
+        val normalized = SiteProxyManager.normalizeProxyUrl(SiteProxyManager(context).proxyUrl)
+            ?: throw IOException("代理地址无效，请在站点代理设置里填写 host:port")
+        val uri = Uri.parse(normalized)
+        val host = uri.host ?: throw IOException("代理地址无效：$normalized")
+        val port = uri.port
+        if (port !in 1..65535) throw IOException("代理端口无效：$normalized")
+        val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port))
+        return url.openConnection(proxy) as HttpURLConnection
+    }
+
     private fun post(path: String, body: String, auth: Boolean): HttpResponse {
-        val conn = (URL(BASE_URL + path).openConnection() as HttpURLConnection).apply {
+        val conn = openConnection(path).apply {
             requestMethod = "POST"
             setRequestProperty("Content-Type", "application/json")
             if (auth) {
@@ -164,7 +188,7 @@ class CloudSyncManager(
     }
 
     private fun delete(path: String): HttpResponse {
-        val conn = (URL(BASE_URL + path).openConnection() as HttpURLConnection).apply {
+        val conn = openConnection(path).apply {
             requestMethod = "DELETE"
             setRequestProperty("Authorization", "Bearer ${getToken()}")
             connectTimeout = 10000
@@ -174,7 +198,7 @@ class CloudSyncManager(
     }
 
     private fun get(path: String): HttpResponse {
-        val conn = (URL(BASE_URL + path).openConnection() as HttpURLConnection).apply {
+        val conn = openConnection(path).apply {
             requestMethod = "GET"
             setRequestProperty("Authorization", "Bearer ${getToken()}")
             connectTimeout = 10000
