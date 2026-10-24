@@ -61,4 +61,42 @@
     <string name="download_image">下载图片</string>
     <string name="image_saved">图片已保存：%s</string>
     <string name="image_save_failed">图片保存失败</string>
+
+    <!-- 站点代理 -->
+    <string name="proxy_settings">站点代理设置</string>
+    <string name="proxy_direct">直连</string>
+    <string name="proxy_enabled">代理</string>
+    <string name="proxy_follow_global">跟随全局</string>
+    <string name="proxy_global_default">全局默认</string>
+    <string name="proxy_current_site_label">当前网站</string>
+    <string name="proxy_current_site">当前网站：%1$s</string>
+    <string name="proxy_address">代理地址</string>
+    <string name="proxy_address_hint">http://127.0.0.1:7890</string>
+    <string name="proxy_address_help">例如 http://127.0.0.1:7890 或 http://127.0.0.1:33000</string>
+    <string name="proxy_invalid_address">代理地址无效，请填写 host:port</string>
+    <string name="proxy_unavailable">当前 WebView 不支持按站点代理</string>
+    <string name="proxy_apply_failed">代理设置未生效，请重试</string>
+    <string name="proxy_unreachable">代理端口不可用，请确认 Clash/VPN 已启动</string>
+    <string name="proxy_vpn_hint">提示：直连只是不走本地 HTTP 代理；要真正绕过 VPN，请在 A_CM_FS 的应用代理里把本应用设为绕过</string>
+    <string name="proxy_apply">应用</string>
+    <string name="proxy_applied">代理设置已应用</string>
+    <string name="proxy_close">关闭</string>
+    <string name="proxy_rules">站点规则</string>
+    <string name="proxy_rules_hint">规则按域名匹配，支持 *.site.com 通配符；未命中的网站使用全局默认。点按规则可编辑。</string>
+    <string name="proxy_search_hint">搜索规则</string>
+    <string name="proxy_no_rules">还没有站点规则</string>
+    <string name="proxy_no_search_result">没有匹配的规则</string>
+    <string name="proxy_rule_count">共 %1$d 条规则</string>
+    <string name="proxy_search_result_count">找到 %1$d 条规则</string>
+    <string name="proxy_add_rule_title">添加规则</string>
+    <string name="proxy_edit_rule_title">编辑规则</string>
+    <string name="proxy_rule_pattern_hint">site.com 或 *.site.com</string>
+    <string name="proxy_use_current_site">当前网站</string>
+    <string name="proxy_add_rule">添加规则</string>
+    <string name="proxy_save_rule">保存修改</string>
+    <string name="proxy_cancel_edit">取消编辑</string>
+    <string name="proxy_invalid_pattern">网址格式无效，请填写域名或 *.site.com</string>
+    <string name="proxy_rule_conflict">该规则与已有规则重叠，将按更具体的规则生效</string>
+    <string name="proxy_rule_saved">规则已保存</string>
+    <string name="proxy_no_current_site">当前没有打开的网站</string>
 </resources>

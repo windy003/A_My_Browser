@@ -48,6 +48,14 @@
                 android:textColorHint="@color/gray_medium"
                 android:textSize="14sp" />
 
+            <com.swiftbrowser.ui.browser.SiteProxyIndicatorView
+                android:id="@+id/siteProxyIndicator"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:contentDescription="站点代理状态"
+                android:visibility="invisible" />
+
             <ImageButton
                 android:id="@+id/btnRefresh"
                 android:layout_width="36dp"
