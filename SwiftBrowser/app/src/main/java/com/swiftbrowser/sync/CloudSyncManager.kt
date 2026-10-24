@@ -1,7 +1,6 @@
 package com.swiftbrowser.sync
 
 import android.content.Context
-import android.net.Uri
 import com.swiftbrowser.data.dao.BookmarkDao
 import com.swiftbrowser.data.entity.Bookmark
 import com.swiftbrowser.ui.browser.SiteProxyManager
@@ -11,8 +10,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
-import java.net.InetSocketAddress
-import java.net.Proxy
 import java.net.URL
 
 class CloudSyncManager(
@@ -162,13 +159,8 @@ class CloudSyncManager(
      */
     private fun openConnection(path: String): HttpURLConnection {
         val url = URL(BASE_URL + path)
-        val normalized = SiteProxyManager.normalizeProxyUrl(SiteProxyManager(context).proxyUrl)
+        val proxy = SiteProxyManager.httpProxy(context)
             ?: throw IOException("代理地址无效，请在站点代理设置里填写 host:port")
-        val uri = Uri.parse(normalized)
-        val host = uri.host ?: throw IOException("代理地址无效：$normalized")
-        val port = uri.port
-        if (port !in 1..65535) throw IOException("代理端口无效：$normalized")
-        val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port))
         return url.openConnection(proxy) as HttpURLConnection
     }
 

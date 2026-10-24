@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Android 11+ 软件包可见性：让划词查词类 App（如有道词典）能显示在选中文字的菜单中 -->
@@ -83,6 +85,11 @@
         <activity
             android:name=".ui.auth.LoginActivity"
             android:label="@string/sign_in" />
+
+        <service
+            android:name=".download.ProxyDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

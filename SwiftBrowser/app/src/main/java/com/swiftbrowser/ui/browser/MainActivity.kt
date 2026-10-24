@@ -3,7 +3,6 @@ package com.swiftbrowser.ui.browser
 import android.Manifest
 import android.animation.ValueAnimator
 import android.annotation.SuppressLint
-import android.app.DownloadManager
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.Intent
@@ -63,6 +62,7 @@ import kotlin.math.roundToInt
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftBrowserApp
 import com.swiftbrowser.data.entity.Bookmark
+import com.swiftbrowser.download.ProxyDownloadService
 import com.swiftbrowser.databinding.ActivityMainBinding
 import com.swiftbrowser.databinding.DialogProxySettingsBinding
 import com.swiftbrowser.ui.auth.LoginActivity
@@ -320,26 +320,6 @@ class MainActivity : AppCompatActivity() {
     private var pendingDownload: PendingDownload? = null
     private data class PendingDownload(val url: String, val contentDisposition: String?, val mimeType: String?, val fileName: String)
 
-    // 记录通过 DownloadManager 发起的下载，用于在完成时提示
-    private val pendingDownloadIds = mutableSetOf<Long>()
-    private val downloadCompleteReceiver = object : android.content.BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) ?: -1L
-            if (id == -1L || !pendingDownloadIds.remove(id)) return
-            val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-            dm.query(DownloadManager.Query().setFilterById(id)).use { cursor ->
-                if (!cursor.moveToFirst()) return
-                val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                val title = cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TITLE)) ?: ""
-                when (status) {
-                    DownloadManager.STATUS_SUCCESSFUL ->
-                        Toast.makeText(this@MainActivity, getString(R.string.download_complete, title), Toast.LENGTH_SHORT).show()
-                    DownloadManager.STATUS_FAILED ->
-                        Toast.makeText(this@MainActivity, getString(R.string.download_failed, title), Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-    }
     private val storagePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -422,15 +402,6 @@ class MainActivity : AppCompatActivity() {
         setupKeyboardListener()
         setupSiteProxy()
 
-        // 监听下载完成，用于弹出"下载完成"提示
-        val downloadFilter = android.content.IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(downloadCompleteReceiver, downloadFilter, Context.RECEIVER_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(downloadCompleteReceiver, downloadFilter)
-        }
-
         // 先应用站点代理配置，再创建/恢复标签，保证第一个请求就按设置走。
         // 代理回调异常时用 1 秒超时兜底，避免启动白屏。
         var browsingStarted = false
@@ -469,9 +440,6 @@ class MainActivity : AppCompatActivity() {
         for (tab in tabs) {
             tab.webView?.destroy()
         }
-        try {
-            unregisterReceiver(downloadCompleteReceiver)
-        } catch (_: Exception) { }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -1370,31 +1338,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startDownload(url: String, contentDisposition: String?, mimeType: String?, fileName: String) {
-        // 如果同名文件已存在，自动加编号: app(1).apk, app(2).apk ...
-        val actualFileName = getUniqueFileName(fileName)
-
-        val request = DownloadManager.Request(Uri.parse(url)).apply {
-            setMimeType(mimeType)
-            addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url) ?: "")
-            setTitle(actualFileName)
-            setDescription(actualFileName)
-            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, actualFileName)
-        }
-        val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-        val downloadId = dm.enqueue(request)
-        pendingDownloadIds.add(downloadId)
-        // 保存下载记录（用实际文件名）
-        lifecycleScope.launch {
-            app.database.downloadRecordDao().insert(
-                com.swiftbrowser.data.entity.DownloadRecord(
-                    fileName = actualFileName,
-                    url = url,
-                    mimeType = mimeType
-                )
-            )
-        }
-        Toast.makeText(this, getString(R.string.download_started, actualFileName), Toast.LENGTH_SHORT).show()
+        // 系统 DownloadManager 不走 WebView 的代理，改用应用内服务下载，
+        // 由 ProxyDownloadService 显式挂上站点代理设置里的 HTTP 代理。
+        // 文件名去重和下载记录由服务在真正完成后处理。
+        val tab = activeTab
+        ProxyDownloadService.start(
+            this,
+            url,
+            fileName,
+            mimeType,
+            tab?.webView?.settings?.userAgentString,
+            tab?.url?.takeIf { it.startsWith("http") }
+        )
+        Toast.makeText(this, getString(R.string.download_started, fileName), Toast.LENGTH_SHORT).show()
     }
 
     private fun getUniqueFileName(fileName: String): String {

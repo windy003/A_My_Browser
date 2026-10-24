@@ -12,6 +12,7 @@ import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
 import androidx.webkit.WebViewFeature
 import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.Socket
 
 /** 一条站点代理规则。pattern 支持 host、完整 URL，或 *.site.com 形式的通配符。 */
@@ -55,6 +56,26 @@ class SiteProxyManager(context: Context) {
             var value = host?.trim()?.lowercase() ?: return null
             while (value.endsWith(".")) value = value.dropLast(1)
             return value.ifEmpty { null }
+        }
+
+        /** 当前配置的代理地址（可能是未规范化的旧值，使用前先过 [normalizeProxyUrl]）。 */
+        fun currentProxyUrl(context: Context): String {
+            val prefs = context.applicationContext
+                .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            return prefs.getString(KEY_PROXY_URL, DEFAULT_PROXY_URL) ?: DEFAULT_PROXY_URL
+        }
+
+        /**
+         * 用站点代理设置构造 HTTP 代理，供 HttpURLConnection 等非 WebView 请求使用
+         * （WebView 的 ProxyController 不覆盖这些请求）。地址无效时返回 null。
+         */
+        fun httpProxy(context: Context): Proxy? {
+            val normalized = normalizeProxyUrl(currentProxyUrl(context)) ?: return null
+            val uri = Uri.parse(normalized)
+            val host = uri.host ?: return null
+            val port = uri.port
+            if (port !in 1..65535) return null
+            return Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port))
         }
 
         /** 代理地址规范化：没写 scheme 时补 http://；只保留 scheme://host:port。 */
