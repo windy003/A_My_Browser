@@ -287,16 +287,21 @@ class SiteProxyManager(context: Context) {
         }
     }
 
-    /** 当前 host 实际生效的模式：命中规则里最具体的一条，否则用全局。 */
-    fun effectiveMode(rawHost: String?): String {
-        val host = normalizeHost(rawHost) ?: return globalMode
-        val matching = rules().withIndex().filter { matches(it.value.pattern, host) }
-        val best = matching.maxWithOrNull(
-            compareBy<IndexedValue<SiteProxyRule>> { specificity(it.value.pattern) }
-                .thenBy { it.index }
-        )
-        return best?.value?.mode ?: globalMode
+    /** 当前 host 命中的最具体规则（精确规则 > 通配规则），没有命中返回 null。 */
+    fun effectiveRule(rawHost: String?): SiteProxyRule? {
+        val host = normalizeHost(rawHost) ?: return null
+        return rules().withIndex()
+            .filter { matches(it.value.pattern, host) }
+            .maxWithOrNull(
+                compareBy<IndexedValue<SiteProxyRule>> { specificity(it.value.pattern) }
+                    .thenBy { it.index }
+            )
+            ?.value
     }
+
+    /** 当前 host 实际生效的模式：命中规则里最具体的一条，否则用全局。 */
+    fun effectiveMode(rawHost: String?): String =
+        effectiveRule(rawHost)?.mode ?: globalMode
 
     /**
      * 当前设备/WebView 是否支持所需的代理覆盖能力。

@@ -3032,6 +3032,49 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        /** 程序化切换单选时不触发监听，避免重复应用代理。 */
+        var syncingCurrentSite = false
+
+        /** 当前网站自己的精确规则；没有则为 null（跟随全局）。 */
+        fun exactSiteRule(): SiteProxyRule? {
+            val host = pageHost ?: return null
+            return siteProxyManager.rules().firstOrNull { it.pattern == host }
+        }
+
+        /** 刷新顶部「当前网站」快捷设置的状态文案与选中项。 */
+        fun refreshCurrentSiteSection() {
+            val host = pageHost
+            if (host == null) {
+                dialogBinding.currentSiteSection.visibility = View.GONE
+                return
+            }
+            dialogBinding.currentSiteSection.visibility = View.VISIBLE
+            dialogBinding.tvCurrentSiteHost.text = host
+            val rule = siteProxyManager.effectiveRule(host)
+            val effectiveLabel = getString(
+                if (siteProxyManager.effectiveMode(host) == SiteProxyManager.MODE_PROXY) {
+                    R.string.proxy_enabled
+                } else {
+                    R.string.proxy_direct
+                }
+            )
+            dialogBinding.tvCurrentSiteEffective.text = if (rule == null) {
+                getString(R.string.proxy_current_site_effective, effectiveLabel)
+            } else {
+                getString(R.string.proxy_current_site_effective_rule, effectiveLabel, rule.pattern)
+            }
+            val checkedId = when (exactSiteRule()?.mode) {
+                SiteProxyManager.MODE_PROXY -> R.id.rbSiteProxy
+                SiteProxyManager.MODE_DIRECT -> R.id.rbSiteDirect
+                else -> R.id.rbSiteFollowGlobal
+            }
+            if (dialogBinding.rgCurrentSite.checkedRadioButtonId != checkedId) {
+                syncingCurrentSite = true
+                dialogBinding.rgCurrentSite.check(checkedId)
+                syncingCurrentSite = false
+            }
+        }
+
         fun renderRules() {
             val query = dialogBinding.etRuleSearch.text?.toString()?.trim()?.lowercase().orEmpty()
             val allRules = siteProxyManager.rules()
@@ -3107,6 +3150,7 @@ class MainActivity : AppCompatActivity() {
                 deleteView.setOnClickListener {
                     siteProxyManager.deleteRule(rule.pattern)
                     if (editingPattern == rule.pattern) resetRuleEditor()
+                    refreshCurrentSiteSection()
                     renderRules()
                     updateSiteProxyIndicator()
                     applySiteProxyConfig(reload = true)
@@ -3149,6 +3193,41 @@ class MainActivity : AppCompatActivity() {
         resetRuleEditor()
         renderRules()
 
+        // 当前网站快捷设置：先设初值，再挂监听，避免初始化时触发应用
+        refreshCurrentSiteSection()
+
+        dialogBinding.rgCurrentSite.setOnCheckedChangeListener { _, checkedId ->
+            if (syncingCurrentSite) return@setOnCheckedChangeListener
+            val host = pageHost ?: return@setOnCheckedChangeListener
+            val current = when (exactSiteRule()?.mode) {
+                SiteProxyManager.MODE_PROXY -> R.id.rbSiteProxy
+                SiteProxyManager.MODE_DIRECT -> R.id.rbSiteDirect
+                else -> R.id.rbSiteFollowGlobal
+            }
+            if (checkedId == current) return@setOnCheckedChangeListener
+
+            when (checkedId) {
+                R.id.rbSiteProxy -> {
+                    siteProxyManager.addOrUpdateRule(host, SiteProxyManager.MODE_PROXY)
+                    Toast.makeText(this, R.string.proxy_site_saved_proxy, Toast.LENGTH_SHORT).show()
+                }
+                R.id.rbSiteDirect -> {
+                    siteProxyManager.addOrUpdateRule(host, SiteProxyManager.MODE_DIRECT)
+                    Toast.makeText(this, R.string.proxy_site_saved_direct, Toast.LENGTH_SHORT).show()
+                }
+                else -> {
+                    siteProxyManager.deleteRule(host)
+                    Toast.makeText(this, R.string.proxy_site_following_global, Toast.LENGTH_SHORT).show()
+                }
+            }
+            // 若下方编辑区正在编辑本站规则，它已不存在，回到新增状态
+            if (editingPattern == host) resetRuleEditor()
+            refreshCurrentSiteSection()
+            renderRules()
+            updateSiteProxyIndicator()
+            applySiteProxyConfig(reload = true)
+        }
+
         dialogBinding.rgGlobal.setOnCheckedChangeListener { _, checkedId ->
             val mode = if (checkedId == R.id.rbGlobalProxy) {
                 SiteProxyManager.MODE_PROXY
@@ -3157,6 +3236,7 @@ class MainActivity : AppCompatActivity() {
             }
             if (siteProxyManager.globalMode != mode) {
                 siteProxyManager.globalMode = mode
+                refreshCurrentSiteSection()
                 updateSiteProxyIndicator()
                 applySiteProxyConfig(reload = true)
             }
@@ -3229,6 +3309,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             resetRuleEditor()
+            refreshCurrentSiteSection()
             renderRules()
             updateSiteProxyIndicator()
             applySiteProxyConfig(reload = true)

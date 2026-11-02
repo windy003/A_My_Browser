@@ -11,9 +11,88 @@
         android:orientation="vertical"
         android:padding="20dp">
 
+        <LinearLayout
+            android:id="@+id/currentSiteSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/proxy_current_site_label"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvCurrentSiteHost"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/tvCurrentSiteEffective"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+
+            <RadioGroup
+                android:id="@+id/rgCurrentSite"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="horizontal">
+
+                <RadioButton
+                    android:id="@+id/rbSiteFollowGlobal"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/proxy_follow_global"
+                    android:textColor="@color/text_primary" />
+
+                <RadioButton
+                    android:id="@+id/rbSiteDirect"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/proxy_direct"
+                    android:textColor="@color/text_primary" />
+
+                <RadioButton
+                    android:id="@+id/rbSiteProxy"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/proxy_enabled"
+                    android:textColor="@color/text_primary" />
+            </RadioGroup>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/proxy_current_site_hint"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="12dp"
+                android:background="@color/divider" />
+        </LinearLayout>
+
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
             android:text="@string/proxy_global_default"
             android:textColor="@color/text_primary"
             android:textSize="14sp"

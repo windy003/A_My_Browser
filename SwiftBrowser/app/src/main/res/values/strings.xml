@@ -70,6 +70,12 @@
     <string name="proxy_global_default">全局默认</string>
     <string name="proxy_current_site_label">当前网站</string>
     <string name="proxy_current_site">当前网站：%1$s</string>
+    <string name="proxy_current_site_hint">为当前网站单独设置直连或代理，优先于全局默认；选「跟随全局」会移除本站规则。</string>
+    <string name="proxy_current_site_effective">当前生效：%1$s</string>
+    <string name="proxy_current_site_effective_rule">当前生效：%1$s（匹配规则 %2$s）</string>
+    <string name="proxy_site_saved_direct">已将当前网站设为直连</string>
+    <string name="proxy_site_saved_proxy">已将当前网站设为代理</string>
+    <string name="proxy_site_following_global">当前网站已改为跟随全局</string>
     <string name="proxy_address">代理地址</string>
     <string name="proxy_address_hint">http://127.0.0.1:7890</string>
     <string name="proxy_address_help">例如 http://127.0.0.1:7890 或 http://127.0.0.1:33000</string>
