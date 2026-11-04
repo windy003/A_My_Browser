@@ -14,7 +14,6 @@ import com.swiftbrowser.util.FaviconProvider
 class BookmarkAdapter(
     private val onClickBookmark: (Bookmark) -> Unit,
     private val onClickFolder: (Bookmark) -> Unit,
-    private val onDelete: (Bookmark) -> Unit,
     private val onLongClick: (Bookmark) -> Unit,
     private val onSelectionChanged: (Int) -> Unit = {},
     private val isProtected: (Bookmark) -> Boolean = { false }
@@ -170,7 +169,6 @@ class BookmarkAdapter(
 
             binding.cbSelect.visibility = if (batchDeleteMode) View.VISIBLE else View.GONE
             binding.cbSelect.isChecked = selectedIds.contains(bookmark.id)
-            binding.btnDelete.visibility = if (batchDeleteMode) View.GONE else View.VISIBLE
 
             binding.root.setOnClickListener {
                 if (batchDeleteMode) {
@@ -179,7 +177,6 @@ class BookmarkAdapter(
                     onClickBookmark(bookmark)
                 }
             }
-            binding.btnDelete.setOnClickListener { onDelete(bookmark) }
             binding.root.setOnLongClickListener {
                 if (!batchDeleteMode) {
                     onLongClick(bookmark)

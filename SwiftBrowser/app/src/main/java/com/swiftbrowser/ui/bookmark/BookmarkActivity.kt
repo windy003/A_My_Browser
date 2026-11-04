@@ -1,6 +1,9 @@
 package com.swiftbrowser.ui.bookmark
 
 import android.content.Intent
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.net.Uri
 import android.os.Bundle
 import android.text.Editable
@@ -14,6 +17,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.ItemTouchHelper
@@ -190,9 +194,6 @@ class BookmarkActivity : AppCompatActivity() {
                 folderStack.add(folder)
                 loadCurrentFolder()
             },
-            onDelete = { bookmark ->
-                confirmDelete(bookmark)
-            },
             onLongClick = { bookmark ->
                 showItemOptions(bookmark)
             },
@@ -204,6 +205,97 @@ class BookmarkActivity : AppCompatActivity() {
 
         binding.rvBookmarks.layoutManager = LinearLayoutManager(this)
         binding.rvBookmarks.adapter = adapter
+        setupSwipeToDelete()
+    }
+
+    /**
+     * 左滑删除书签：滑动时露出红色背景和垃圾桶图标，松手后弹出确认框；
+     * 是否真正删除以确认框为准，取消时条目已滑回原位。
+     * 文件夹、快速拨号文件夹以及批量删除模式下不响应左滑。
+     */
+    private fun setupSwipeToDelete() {
+        val density = resources.displayMetrics.density
+        val iconSize = (24 * density).toInt()
+        val iconMargin = (16 * density).toInt()
+        val cornerRadius = 8 * density
+        val bgPaint = Paint().apply {
+            color = ContextCompat.getColor(this@BookmarkActivity, R.color.red)
+            isAntiAlias = true
+        }
+        val deleteIcon = ContextCompat.getDrawable(this, R.drawable.ic_delete)?.mutate()?.apply {
+            setTint(Color.WHITE)
+        }
+
+        val callback = object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT) {
+
+            override fun onMove(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+                target: RecyclerView.ViewHolder
+            ): Boolean = false
+
+            override fun getSwipeDirs(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder
+            ): Int {
+                if (adapter.batchDeleteMode) return 0
+                val position = viewHolder.bindingAdapterPosition
+                if (position == RecyclerView.NO_POSITION) return 0
+                val item = adapter.currentList.getOrNull(position) ?: return 0
+                // 只允许书签左滑删除；文件夹仍通过长按菜单删除
+                if (item.isFolder || isSpeedDialFolder(item)) return 0
+                return super.getSwipeDirs(recyclerView, viewHolder)
+            }
+
+            override fun getSwipeThreshold(viewHolder: RecyclerView.ViewHolder): Float = 0.3f
+
+            override fun getSwipeEscapeVelocity(defaultValue: Float): Float = defaultValue * 0.5f
+
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+                val position = viewHolder.bindingAdapterPosition
+                if (position == RecyclerView.NO_POSITION) return
+                val bookmark = adapter.currentList.getOrNull(position) ?: return
+                // 先还原条目，删除与否由确认框决定（取消后列表保持完整）
+                adapter.notifyItemChanged(position)
+                confirmDelete(bookmark)
+            }
+
+            override fun onChildDraw(
+                c: Canvas,
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+                dX: Float,
+                dY: Float,
+                actionState: Int,
+                isCurrentlyActive: Boolean
+            ) {
+                val itemView = viewHolder.itemView
+                if (dX < 0) {
+                    c.drawRoundRect(
+                        itemView.right + dX,
+                        itemView.top.toFloat(),
+                        itemView.right.toFloat(),
+                        itemView.bottom.toFloat(),
+                        cornerRadius,
+                        cornerRadius,
+                        bgPaint
+                    )
+                    if (deleteIcon != null) {
+                        val iconTop = itemView.top + (itemView.height - iconSize) / 2
+                        val iconRight = itemView.right - iconMargin
+                        deleteIcon.setBounds(
+                            iconRight - iconSize,
+                            iconTop,
+                            iconRight,
+                            iconTop + iconSize
+                        )
+                        deleteIcon.draw(c)
+                    }
+                }
+                super.onChildDraw(c, recyclerView, viewHolder, dX, dY, actionState, isCurrentlyActive)
+            }
+        }
+        ItemTouchHelper(callback).attachToRecyclerView(binding.rvBookmarks)
     }
 
     private fun loadCurrentFolder() {
