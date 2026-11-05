@@ -3316,12 +3316,13 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.proxy_rule_saved, Toast.LENGTH_SHORT).show()
         }
 
-        AlertDialog.Builder(this, R.style.DialogTheme)
-            .setTitle(R.string.proxy_settings)
+        // 标题由布局自绘（标题栏右侧放关闭按钮），这里不再用 setTitle
+        val dialog = AlertDialog.Builder(this, R.style.DialogTheme)
             .setView(dialogBinding.root)
-            .setPositiveButton(R.string.proxy_close, null)
             .create()
-            .show()
+        // 关闭按钮位于弹窗右上角
+        dialogBinding.btnProxyDialogClose.setOnClickListener { dialog.dismiss() }
+        dialog.show()
     }
 
     // ==================== 返回键 ====================
