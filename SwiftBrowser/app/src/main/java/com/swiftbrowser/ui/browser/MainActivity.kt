@@ -286,6 +286,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val MENU_ID_YOUDAO = 0x59440001
+        private const val MENU_ID_GOOGLE_SEARCH = 0x59440002
         private const val YOUDAO_PACKAGE = "com.youdao.dict"
         // 桌面模式下强制的页面布局宽度（CSS px），用于命中网站的桌面版断点。
         // 取 1024 是为了越过常见桌面断点（如 GitHub/Primer 的 lg=1012px），
@@ -1239,6 +1240,14 @@ class MainActivity : AppCompatActivity() {
                         mode?.finish()
                         return true
                     }
+                    if (item?.itemId == MENU_ID_GOOGLE_SEARCH) {
+                        evaluateJavascript("(function(){return window.getSelection().toString();})();") { value ->
+                            val word = decodeJsString(value)
+                            if (word.isNotBlank()) searchOnGoogle(word)
+                        }
+                        mode?.finish()
+                        return true
+                    }
                     return callback?.onActionItemClicked(mode, item) ?: false
                 }
 
@@ -1267,16 +1276,20 @@ class MainActivity : AppCompatActivity() {
                 if (isYoudao) menu.removeItem(item.itemId)
             }
             // 2. 在"复制"紧后面插入自定义项（order 与复制相同，后插入即排在其后）
-            if (menu.findItem(MENU_ID_YOUDAO) == null) {
-                val copyTitle = getString(android.R.string.copy)
-                var order = 2 // 复制的默认 order
-                for (i in 0 until menu.size()) {
-                    if (menu.getItem(i).title?.toString() == copyTitle) {
-                        order = menu.getItem(i).order
-                        break
-                    }
+            val copyTitle = getString(android.R.string.copy)
+            var order = 2 // 复制的默认 order
+            for (i in 0 until menu.size()) {
+                if (menu.getItem(i).title?.toString() == copyTitle) {
+                    order = menu.getItem(i).order
+                    break
                 }
+            }
+            if (menu.findItem(MENU_ID_YOUDAO) == null) {
                 menu.add(0, MENU_ID_YOUDAO, order, "有道翻译")
+                    .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+            }
+            if (menu.findItem(MENU_ID_GOOGLE_SEARCH) == null) {
+                menu.add(0, MENU_ID_GOOGLE_SEARCH, order, "谷歌搜索")
                     .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
             }
         }
@@ -1309,6 +1322,13 @@ class MainActivity : AppCompatActivity() {
                     Uri.parse("market://details?id=$YOUDAO_PACKAGE")))
             } catch (_: android.content.ActivityNotFoundException) { }
         }
+    }
+
+    // 在新标签页中用谷歌搜索选中的文字
+    private fun searchOnGoogle(word: String) {
+        val url = "https://www.google.com/search?q=" + Uri.encode(word.trim())
+        val tab = createNewTab(url)
+        tab.webView?.loadUrl(url)
     }
 
     // ==================== 下载 ====================
