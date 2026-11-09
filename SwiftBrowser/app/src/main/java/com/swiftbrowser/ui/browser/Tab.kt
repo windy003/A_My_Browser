@@ -14,6 +14,8 @@ data class Tab(
     var openerTabId: Long? = null,
     // 放大字体模式：每个标签页独立开关，互不影响
     var bigFontModeEnabled: Boolean = false,
+    // 放大字体模式上次使用的字号百分比（50–300），关闭再开启、重启 App 后都能恢复
+    var bigFontTextZoom: Int = 150,
     // 从上次退出前恢复的阅读进度（纵向滚动像素）；页面加载完成后消费一次即清空
     var pendingScrollRestore: Int? = null,
     // 首页被当成一条正常历史记录叠在当前网页之上（在网页中按了首页键）：

@@ -58,6 +58,7 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.PagerSnapHelper
 import androidx.recyclerview.widget.RecyclerView
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftBrowserApp
@@ -134,6 +135,10 @@ class MainActivity : AppCompatActivity() {
     }
     // 桌面模式下为各 WebView 注册的 document-start 脚本句柄，用于关闭时移除
     private val desktopScripts = HashMap<WebView, ScriptHandler>()
+    // 放大字体模式下为各 WebView 注册的重排脚本句柄，用于关闭模式时移除
+    private val bigFontScripts = HashMap<WebView, ScriptHandler>()
+    // 放大字体模式下为各 WebView 注册的「强制设备宽度 viewport」脚本句柄
+    private val bigFontViewportScripts = HashMap<WebView, ScriptHandler>()
     // 把网页 viewport 宽度强制为桌面宽度的脚本（渲染前注入）
     private val desktopViewportScript: String by lazy {
         """
@@ -169,6 +174,168 @@ class MainActivity : AppCompatActivity() {
                     document.documentElement, { childList: true, subtree: true }
                 );
             } catch (e) {}
+        })();
+        """.trimIndent()
+    }
+
+    // 放大字体模式的重排样式：只做「标准重排」——文字自动换行、长单词/链接断行、
+    // 图片/表格/代码块不超出屏宽；不强制改视口宽度以外的布局，尽量保留网站原布局。
+    private val bigFontReflowCss: String by lazy {
+        """
+        /* 页面根容器永远不超过设备宽度；固定 px 宽度的页面靠这一步收缩 */
+        html, body {
+          width: 100% !important;
+          max-width: 100% !important;
+          min-width: 0 !important;
+          overflow-wrap: break-word !important;
+        }
+        /* 关键：Word/公众号/老式网页里常见固定 px 宽的容器（width:900px 等），
+           textZoom 放大后文字会撑出屏幕。给所有元素加上限，超宽容器会收缩并重新换行。 */
+        body * {
+          max-width: 100% !important;
+          overflow-wrap: break-word !important;
+        }
+        div, section, article, main, header, footer, nav, aside, center,
+        p, ul, ol, dl, li, table, thead, tbody, tr, td, th, form, pre, blockquote {
+          min-width: 0 !important;
+        }
+        img, video, canvas, svg, iframe, embed, object {
+          max-width: 100% !important;
+        }
+        img, video { height: auto !important; }
+        pre, code, kbd, samp {
+          max-width: 100% !important;
+          white-space: pre-wrap !important;
+          overflow-wrap: anywhere !important;
+          word-break: break-word !important;
+        }
+        a, td, th {
+          overflow-wrap: anywhere !important;
+        }
+        """.trimIndent()
+    }
+
+    // 幂等注入重排样式。document-start 注入时 <head> 可能还不存在，
+    // 用 documentElement 兜底，并在 DOMContentLoaded/load 时再次确认。
+    // window.top !== window 直接跳过：只作用于主文档，不污染广告/支付/视频 iframe。
+    private val bigFontReflowScript: String by lazy {
+        val cssLiteral = org.json.JSONObject.quote(bigFontReflowCss)
+        """
+        (function() {
+          if (window.top !== window) return;
+          var STYLE_ID = '__swift_big_font_reflow__';
+          var CSS = $cssLiteral;
+          function ensure() {
+            var root = document.head || document.documentElement;
+            if (!root) return;
+            var el = document.getElementById(STYLE_ID);
+            if (!el) {
+              el = document.createElement('style');
+              el.id = STYLE_ID;
+              root.appendChild(el);
+            }
+            if (el.textContent !== CSS) el.textContent = CSS;
+          }
+          ensure();
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', ensure);
+          }
+          window.addEventListener('load', ensure);
+        })();
+        """.trimIndent()
+    }
+
+    // 关闭放大字体模式时移除已注入的重排样式
+    private val bigFontReflowRemoveScript: String by lazy {
+        """
+        (function() {
+          var el = document.getElementById('__swift_big_font_reflow__');
+          if (el && el.parentNode) el.parentNode.removeChild(el);
+        })();
+        """.trimIndent()
+    }
+
+    // 放大字体模式的视口脚本：把网页 viewport 强制成「设备宽度」。
+    // 有些页面（尤其是公文/Word 导出页）会声明比屏幕更宽的视口，或给容器写死 px 宽，
+    // 放大字号后文字仍按那个宽度换行，于是右侧被切掉。
+    // 注意：动态修改已有 meta 在 Android WebView 上不一定重新布局，所以额外追加一个
+    // 自己的 meta 并始终放在 <head> 末尾；追加/移动 meta 会触发 WebView 重新计算视口。
+    private val bigFontViewportScript: String by lazy {
+        """
+        (function() {
+          if (window.top !== window) return;
+          var DESIRED = 'width=device-width, initial-scale=1.0';
+          var MINE = 'data-swift-bigfont-viewport';
+          var scheduled = false;
+
+          function ensure() {
+            var head = document.head || document.documentElement;
+            if (!head) return;
+            // 覆盖网页自带的 viewport，避免它把宽度改回去
+            var metas = document.querySelectorAll('meta[name="viewport"]');
+            for (var i = 0; i < metas.length; i++) {
+              if (metas[i].hasAttribute(MINE)) continue;
+              if (!metas[i].hasAttribute('data-swift-bigfont-orig')) {
+                metas[i].setAttribute('data-swift-bigfont-orig', metas[i].getAttribute('content') || '');
+              }
+              if (metas[i].getAttribute('content') !== DESIRED) {
+                metas[i].setAttribute('content', DESIRED);
+              }
+            }
+            var mine = document.querySelector('meta[' + MINE + ']');
+            if (!mine) {
+              mine = document.createElement('meta');
+              mine.setAttribute('name', 'viewport');
+              mine.setAttribute(MINE, '1');
+              mine.setAttribute('content', DESIRED);
+            } else if (mine.getAttribute('content') !== DESIRED) {
+              mine.setAttribute('content', DESIRED);
+            }
+            if (mine.parentNode !== head || mine !== head.lastElementChild) {
+              head.appendChild(mine);
+            }
+          }
+
+          function scheduleEnsure() {
+            if (scheduled) return;
+            scheduled = true;
+            setTimeout(function() { scheduled = false; ensure(); }, 100);
+          }
+
+          ensure();
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', ensure);
+          }
+          window.addEventListener('load', ensure);
+          // SPA 可能动态重置 viewport；只监听 <head> 的直接子节点，开销很小
+          try {
+            if (document.head) {
+              new MutationObserver(scheduleEnsure).observe(document.head, { childList: true });
+            }
+          } catch (e) {}
+        })();
+        """.trimIndent()
+    }
+
+    // 关闭放大字体模式时恢复网页原本的 viewport
+    private val bigFontViewportRestoreScript: String by lazy {
+        """
+        (function() {
+          var metas = document.querySelectorAll('meta[name="viewport"]');
+          for (var i = 0; i < metas.length; i++) {
+            var m = metas[i];
+            if (m.hasAttribute('data-swift-bigfont-viewport')) {
+              if (m.parentNode) m.parentNode.removeChild(m);
+            } else if (m.hasAttribute('data-swift-bigfont-orig')) {
+              var orig = m.getAttribute('data-swift-bigfont-orig');
+              if (orig === null || orig === '') {
+                m.removeAttribute('content');
+              } else {
+                m.setAttribute('content', orig);
+              }
+              m.removeAttribute('data-swift-bigfont-orig');
+            }
+          }
         })();
         """.trimIndent()
     }
@@ -439,7 +606,12 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         for (tab in tabs) {
-            tab.webView?.destroy()
+            tab.webView?.let { webView ->
+                bigFontScripts.remove(webView)?.remove()
+                bigFontViewportScripts.remove(webView)?.remove()
+                desktopScripts.remove(webView)?.remove()
+                webView.destroy()
+            }
         }
     }
 
@@ -523,6 +695,8 @@ class MainActivity : AppCompatActivity() {
         tabs.remove(tab)
         binding.webViewContainer.removeView(tab.webView)
         tab.webView?.let { desktopScripts.remove(it) }
+        tab.webView?.let { bigFontScripts.remove(it)?.remove() }
+        tab.webView?.let { bigFontViewportScripts.remove(it)?.remove() }
         tab.webView?.destroy()
 
         if (tab == activeTab) {
@@ -567,6 +741,8 @@ class MainActivity : AppCompatActivity() {
                 obj.put("url", tab.url ?: org.json.JSONObject.NULL)
                 obj.put("title", tab.title ?: org.json.JSONObject.NULL)
                 obj.put("scrollY", tab.webView?.scrollY ?: 0)
+                obj.put("bigFontMode", tab.bigFontModeEnabled)
+                obj.put("textZoom", tab.webView?.settings?.textZoom ?: tab.bigFontTextZoom)
                 arr.put(obj)
             }
             prefs.edit()
@@ -592,6 +768,13 @@ class MainActivity : AppCompatActivity() {
                 tab.url = url
                 tab.title = title
                 if (scrollY > 0) tab.pendingScrollRestore = scrollY
+                // 恢复放大字体模式（必须在 loadUrl 之前应用，document-start 脚本才能命中首次加载）
+                tab.bigFontModeEnabled = obj.optBoolean("bigFontMode", false)
+                tab.bigFontTextZoom = obj.optInt("textZoom", BIG_FONT_TEXT_ZOOM)
+                    .coerceIn(MIN_TEXT_ZOOM, MAX_TEXT_ZOOM)
+                if (tab.bigFontModeEnabled) {
+                    tab.webView?.let { applyBigFontMode(it, true, tab.bigFontTextZoom) }
+                }
                 tabs.add(tab)
                 if (url != null) tab.webView?.loadUrl(url)
             }
@@ -736,6 +919,15 @@ class MainActivity : AppCompatActivity() {
                         !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                         view.evaluateJavascript(desktopViewportScript, null)
                     }
+                    // 放大字体模式重排样式的回退路径：设备不支持 DOCUMENT_START_SCRIPT 时，
+                    // 在页面开始加载时尽早注入（脚本会在 DOMContentLoaded 前后自行重试）。
+                    if (view != null && findTabByWebView(view)?.bigFontModeEnabled == true &&
+                        !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                        view.evaluateJavascript(bigFontReflowScript, null)
+                        if (!desktopModeEnabled) {
+                            view.evaluateJavascript(bigFontViewportScript, null)
+                        }
+                    }
                     val tab = findTabByWebView(view) ?: return
                     tab.url = url
                     if (tab == activeTab) {
@@ -754,6 +946,14 @@ class MainActivity : AppCompatActivity() {
                         binding.etUrl.setText(url)
                         binding.progressBar.visibility = View.GONE
                         updateSiteProxyIndicator()
+                    }
+                    // 放大字体模式：页面加载完成后再次确保重排样式和「设备宽度视口」已生效。
+                    // 脚本幂等，重复执行不会累积节点；也能兜住 SPA 重置 viewport 的情况。
+                    if (tab.bigFontModeEnabled && view != null) {
+                        view.evaluateJavascript(bigFontReflowScript, null)
+                        if (!desktopModeEnabled) {
+                            view.evaluateJavascript(bigFontViewportScript, null)
+                        }
                     }
                     // 恢复上次退出前保存的阅读进度（仅消费一次，避免后续跳转/刷新被误恢复）
                     tab.pendingScrollRestore?.let { restoreY ->
@@ -1175,24 +1375,44 @@ class MainActivity : AppCompatActivity() {
     // 继承 WebView 以定制文字选择菜单：把"有道翻译"挪到"复制"紧后面
     private inner class SelectionWebView(context: Context) : WebView(context) {
         // 放大字体模式下接管双指捏合手势：只调节 textZoom（字号），不整体缩放画面，
-        // 网页靠自适应宽度自动屏内换行，避免横向溢出（原生画面缩放此时已在 applyBigFontMode 中关闭）
-        private var pinchStartTextZoom = 100
+        // 网页靠自适应宽度和注入的重排样式自动屏内换行（原生画面缩放已在 applyBigFontMode 关闭）。
+        // ScaleGestureDetector.scaleFactor 是「相对上一帧」的增量，必须用浮点累加，
+        // 不能每帧乘手势起点的固定值，否则字号几乎不动。
+        private var pinchAccumulatedZoom = 100f
+        private var lastAppliedTextZoom = 100
         private val fontZoomDetector = ScaleGestureDetector(
             context,
             object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
                 override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
-                    pinchStartTextZoom = settings.textZoom
+                    pinchAccumulatedZoom = settings.textZoom.toFloat()
+                    lastAppliedTextZoom = settings.textZoom
                     return true
                 }
 
                 override fun onScale(detector: ScaleGestureDetector): Boolean {
-                    val newZoom = (pinchStartTextZoom * detector.scaleFactor)
-                        .roundToInt()
-                        .coerceIn(MIN_TEXT_ZOOM, MAX_TEXT_ZOOM)
-                    if (newZoom != settings.textZoom) {
-                        settings.textZoom = newZoom
+                    val factor = detector.scaleFactor
+                    if (!factor.isFinite() || factor <= 0f) return true
+                    pinchAccumulatedZoom = (pinchAccumulatedZoom * factor)
+                        .coerceIn(MIN_TEXT_ZOOM.toFloat(), MAX_TEXT_ZOOM.toFloat())
+                    val target = pinchAccumulatedZoom.roundToInt()
+                    // 每 2% 才写一次，减少复杂页面逐帧重排的卡顿
+                    if (abs(target - lastAppliedTextZoom) >= 2) {
+                        lastAppliedTextZoom = target
+                        settings.textZoom = target
+                        findTabByWebView(this@SelectionWebView)?.bigFontTextZoom = target
                     }
                     return true
+                }
+
+                override fun onScaleEnd(detector: ScaleGestureDetector) {
+                    // 收尾时把不足 2% 的零头也落到位
+                    val target = pinchAccumulatedZoom.roundToInt()
+                        .coerceIn(MIN_TEXT_ZOOM, MAX_TEXT_ZOOM)
+                    if (target != settings.textZoom) {
+                        settings.textZoom = target
+                    }
+                    lastAppliedTextZoom = target
+                    findTabByWebView(this@SelectionWebView)?.bigFontTextZoom = target
                 }
             }
         )
@@ -2084,11 +2304,11 @@ class MainActivity : AppCompatActivity() {
                             tab.bigFontModeEnabled = !tab.bigFontModeEnabled
                             Toast.makeText(
                                 this,
-                                "放大字体模式已" + if (tab.bigFontModeEnabled) "开启（双指捏合可调节字号，仅当前标签页）" else "关闭",
+                                "放大字体模式已" + if (tab.bigFontModeEnabled) "开启（双指捏合调字号，文字自动换行，仅当前标签页）" else "关闭",
                                 Toast.LENGTH_SHORT
                             ).show()
                             // 只对当前标签页实时生效，其他标签页不受影响，无需重新加载
-                            tab.webView?.let { applyBigFontMode(it, tab.bigFontModeEnabled) }
+                            tab.webView?.let { applyBigFontMode(it, tab.bigFontModeEnabled, tab.bigFontTextZoom) }
                         }
                         true
                     }
@@ -2250,18 +2470,81 @@ class MainActivity : AppCompatActivity() {
         // 两种模式都保持宽视口与缩略概览，确保页面正确适配
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
+        // 桌面模式与放大字体模式叠加时，同步一下视口策略
+        updateBigFontViewport(webView, findTabByWebView(webView)?.bigFontModeEnabled == true)
     }
 
     /**
      * 放大字体模式：关闭系统原生的画面级双指缩放（会导致横向溢出、需要左右滑动），
-     * 改由 SelectionWebView 自己接管双指手势，只调节 textZoom（字号），
-     * 依赖网页自适应宽度，放大后文字仍在屏内自动换行。
+     * 改由 SelectionWebView 自己接管双指手势，只调节 textZoom（字号）；
+     * 同时注入标准重排样式，让文字/图片/表格随字号在屏宽内自动换行。
      */
-    private fun applyBigFontMode(webView: WebView, enabled: Boolean) {
+    private fun applyBigFontMode(
+        webView: WebView,
+        enabled: Boolean,
+        textZoom: Int = BIG_FONT_TEXT_ZOOM
+    ) {
         val settings = webView.settings
-        settings.textZoom = if (enabled) BIG_FONT_TEXT_ZOOM else 100
+        settings.textZoom = if (enabled) {
+            textZoom.coerceIn(MIN_TEXT_ZOOM, MAX_TEXT_ZOOM)
+        } else {
+            100
+        }
         settings.setSupportZoom(!enabled)
         settings.builtInZoomControls = !enabled
+        if (enabled) {
+            registerBigFontReflow(webView)
+            updateBigFontViewport(webView, true)
+            // document-start 只对「下一次」导航生效，当前已加载的页面立即注入
+            if (!webView.url.isNullOrEmpty()) {
+                webView.evaluateJavascript(bigFontReflowScript, null)
+            }
+        } else {
+            unregisterBigFontReflow(webView)
+            updateBigFontViewport(webView, false)
+            if (!webView.url.isNullOrEmpty()) {
+                webView.evaluateJavascript(bigFontReflowRemoveScript, null)
+            }
+        }
+    }
+
+    /**
+     * 放大字体模式把页面 viewport 强制成设备宽度，文字才会按屏幕宽度重新换行。
+     * 桌面模式已经用 1024px 视口 + 整体缩放适配屏幕，两者叠加时以桌面模式为准，
+     * 避免把桌面布局强行压成手机单栏。
+     */
+    private fun updateBigFontViewport(webView: WebView, bigFontEnabled: Boolean) {
+        val shouldForce = bigFontEnabled && !desktopModeEnabled
+        if (shouldForce) {
+            if (!bigFontViewportScripts.containsKey(webView) &&
+                WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                bigFontViewportScripts[webView] =
+                    WebViewCompat.addDocumentStartJavaScript(webView, bigFontViewportScript, setOf("*"))
+            }
+            if (!webView.url.isNullOrEmpty()) {
+                webView.evaluateJavascript(bigFontViewportScript, null)
+            }
+        } else {
+            bigFontViewportScripts.remove(webView)?.remove()
+            if (!bigFontEnabled && !desktopModeEnabled && !webView.url.isNullOrEmpty()) {
+                webView.evaluateJavascript(bigFontViewportRestoreScript, null)
+            }
+        }
+    }
+
+    /**
+     * 放大字体模式重排脚本：优先用 document-start 注入（渲染前生效、无闪烁）；
+     * 不支持时由 WebViewClient.onPageStarted 回退注入。
+     */
+    private fun registerBigFontReflow(webView: WebView) {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
+        if (bigFontScripts.containsKey(webView)) return
+        bigFontScripts[webView] =
+            WebViewCompat.addDocumentStartJavaScript(webView, bigFontReflowScript, setOf("*"))
+    }
+
+    private fun unregisterBigFontReflow(webView: WebView) {
+        bigFontScripts.remove(webView)?.remove()
     }
 
     /**
