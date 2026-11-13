@@ -87,7 +87,7 @@
             android:label="@string/sign_in" />
 
         <service
-            android:name=".download.ProxyDownloadService"
+            android:name=".download.DownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 

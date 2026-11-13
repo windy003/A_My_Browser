@@ -3,12 +3,10 @@ package com.swiftbrowser.sync
 import android.content.Context
 import com.swiftbrowser.data.dao.BookmarkDao
 import com.swiftbrowser.data.entity.Bookmark
-import com.swiftbrowser.ui.browser.SiteProxyManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -151,17 +149,11 @@ class CloudSyncManager(
     // ==================== 网络请求 ====================
 
     /**
-     * 打开到云端 Worker 的连接。
-     *
-     * 书签同步必须走「站点代理设置」里的代理地址（默认 Clash 的 127.0.0.1:7890）：
-     * WebView 的 ProxyController 只影响 WebView，HttpURLConnection 不会读它，
-     * 所以这里给每个请求显式挂 Proxy。代理不可用时报错，不静默回退直连。
+     * 打开到云端 Worker 的连接。不指定代理，直接连接；开启 VPN/tun 时
+     * 流量由系统自动路由进 tun。
      */
     private fun openConnection(path: String): HttpURLConnection {
-        val url = URL(BASE_URL + path)
-        val proxy = SiteProxyManager.httpProxy(context)
-            ?: throw IOException("代理地址无效，请在站点代理设置里填写 host:port")
-        return url.openConnection(proxy) as HttpURLConnection
+        return URL(BASE_URL + path).openConnection() as HttpURLConnection
     }
 
     private fun post(path: String, body: String, auth: Boolean): HttpResponse {

@@ -63,9 +63,8 @@ import kotlin.math.roundToInt
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftBrowserApp
 import com.swiftbrowser.data.entity.Bookmark
-import com.swiftbrowser.download.ProxyDownloadService
+import com.swiftbrowser.download.DownloadService
 import com.swiftbrowser.databinding.ActivityMainBinding
-import com.swiftbrowser.databinding.DialogProxySettingsBinding
 import com.swiftbrowser.ui.auth.LoginActivity
 import com.swiftbrowser.ui.bookmark.BookmarkActivity
 import com.swiftbrowser.ui.history.HistoryActivity
@@ -568,25 +567,11 @@ class MainActivity : AppCompatActivity() {
         setupTabManager()
         setupFindInPage()
         setupKeyboardListener()
-        setupSiteProxy()
 
-        // 先应用站点代理配置，再创建/恢复标签，保证第一个请求就按设置走。
-        // 代理回调异常时用 1 秒超时兜底，避免启动白屏。
-        var browsingStarted = false
-        val startBrowsingOnce = {
-            if (!browsingStarted) {
-                browsingStarted = true
-                startBrowsing()
-            }
-        }
-        binding.root.postDelayed({ startBrowsingOnce() }, 1000)
-        applySiteProxyConfig(reload = false) { startBrowsingOnce() }
+        startBrowsing()
     }
 
-    private var browsingInitialized = false
-
     private fun startBrowsing() {
-        browsingInitialized = true
         // 恢复上次退出前的所有标签；没有可恢复的状态时（如首次启动）新建一个标签
         if (!restoreTabsState()) {
             createNewTab()
@@ -597,10 +582,7 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         // 尽早持久化标签状态：进程可能在 onStop 之后被系统直接杀死，不会走到 onDestroy。
-        // 代理配置应用期间标签还没恢复，此时保存会把已有状态覆盖成空，必须跳过。
-        if (browsingInitialized) {
-            saveTabsState()
-        }
+        saveTabsState()
     }
 
     override fun onDestroy() {
@@ -662,7 +644,6 @@ class MainActivity : AppCompatActivity() {
         if (binding.tabOverlay.visibility == View.VISIBLE) {
             binding.etUrl.setText(tab.url ?: "")
             isShowingWebView = tab.url != null && !tab.homeOverWebPage
-            updateSiteProxyIndicator()
             return
         }
 
@@ -673,7 +654,6 @@ class MainActivity : AppCompatActivity() {
         } else {
             showHomePage(fromWebPage = tab.homeOverWebPage)
         }
-        updateSiteProxyIndicator()
     }
 
     private fun closeTab(tab: Tab) {
@@ -933,7 +913,6 @@ class MainActivity : AppCompatActivity() {
                     if (tab == activeTab) {
                         binding.etUrl.setText(url)
                         binding.progressBar.visibility = View.VISIBLE
-                        updateSiteProxyIndicator()
                     }
                 }
 
@@ -945,7 +924,6 @@ class MainActivity : AppCompatActivity() {
                     if (tab == activeTab) {
                         binding.etUrl.setText(url)
                         binding.progressBar.visibility = View.GONE
-                        updateSiteProxyIndicator()
                     }
                     // 放大字体模式：页面加载完成后再次确保重排样式和「设备宽度视口」已生效。
                     // 脚本幂等，重复执行不会累积节点；也能兜住 SPA 重置 viewport 的情况。
@@ -1578,11 +1556,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startDownload(url: String, contentDisposition: String?, mimeType: String?, fileName: String) {
-        // 系统 DownloadManager 不走 WebView 的代理，改用应用内服务下载，
-        // 由 ProxyDownloadService 显式挂上站点代理设置里的 HTTP 代理。
+        // 系统 DownloadManager 拿不到 WebView 的 Cookie 和 UA，改用应用内服务下载。
+        // 服务直接连接，开启 VPN/tun 时流量由系统自动路由进 tun。
         // 文件名去重和下载记录由服务在真正完成后处理。
         val tab = activeTab
-        ProxyDownloadService.start(
+        DownloadService.start(
             this,
             url,
             fileName,
@@ -2760,7 +2738,6 @@ class MainActivity : AppCompatActivity() {
         binding.speedDialContainer.visibility = View.GONE
         if (speedDialAdapter.hasLifted()) speedDialAdapter.clearLift()
         hideTabOverlay()
-        updateSiteProxyIndicator()
     }
 
     private fun showHomePage(fromWebPage: Boolean = false) {
@@ -2775,7 +2752,6 @@ class MainActivity : AppCompatActivity() {
         hideTabOverlay()
         // 回到首页时确保工具栏可见
         if (isToolbarHidden) showToolbar()
-        updateSiteProxyIndicator()
     }
 
     // 根据 WebView 当前滚动位置/内容高度刷新右侧阅读进度条
@@ -3213,419 +3189,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
         return super.onKeyUp(keyCode, event)
-    }
-
-    // ==================== 站点代理 ====================
-
-    private val siteProxyManager by lazy { SiteProxyManager(this) }
-    private var proxyApplyGeneration = 0
-
-    private fun setupSiteProxy() {
-        // 点击顶部按钮直接打开站点代理设置
-        binding.siteProxyIndicator.setOnClickListener {
-            showSiteProxyDialog()
-        }
-        updateSiteProxyIndicator()
-    }
-
-    private fun currentPageHost(): String? {
-        if (!isShowingWebView) return null
-        val url = activeTab?.url ?: activeTab?.webView?.url ?: return null
-        return try {
-            val uri = Uri.parse(url)
-            val scheme = uri.scheme?.lowercase()
-            if (scheme != "http" && scheme != "https") return null
-            SiteProxyManager.normalizeHost(uri.host)
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun updateSiteProxyIndicator() {
-        if (!siteProxyManager.isSupported()) {
-            binding.siteProxyIndicator.visibility = View.INVISIBLE
-            return
-        }
-        val host = currentPageHost()
-        if (host == null) {
-            binding.siteProxyIndicator.visibility = View.INVISIBLE
-            return
-        }
-        binding.siteProxyIndicator.visibility = View.VISIBLE
-        binding.siteProxyIndicator.setState(
-            siteProxyManager.globalMode == SiteProxyManager.MODE_PROXY,
-            siteProxyManager.effectiveMode(host) == SiteProxyManager.MODE_PROXY
-        )
-    }
-
-    /**
-     * 应用 ProxyConfig。generation 用来丢弃快速连续操作产生的过期回调。
-     * 启动路径即使应用失败也会通过 onDone 继续，避免白屏。
-     */
-    private fun applySiteProxyConfig(reload: Boolean, onDone: (() -> Unit)? = null) {
-        val generation = ++proxyApplyGeneration
-        siteProxyManager.apply { success ->
-            if (generation != proxyApplyGeneration) return@apply
-            if (!success && reload) {
-                Toast.makeText(this, R.string.proxy_apply_failed, Toast.LENGTH_SHORT).show()
-            }
-            updateSiteProxyIndicator()
-            if (reload && isShowingWebView) {
-                activeTab?.webView?.reload()
-            }
-            onDone?.invoke()
-        }
-    }
-
-    private fun maybeShowVpnHint() {
-        if (siteProxyManager.vpnHintShown) return
-        if (!siteProxyManager.isAppInVpn()) return
-        siteProxyManager.vpnHintShown = true
-        Toast.makeText(this, R.string.proxy_vpn_hint, Toast.LENGTH_LONG).show()
-    }
-
-    private fun showSiteProxyDialog() {
-        if (!siteProxyManager.isSupported()) {
-            Toast.makeText(this, R.string.proxy_unavailable, Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val dialogBinding = DialogProxySettingsBinding.inflate(layoutInflater)
-        val pageHost = currentPageHost()
-
-        // 当前正在编辑的规则；null 表示正在添加新规则
-        var editingPattern: String? = null
-
-        /** 新规则默认与全局相反：全局直连时默认「代理」，全局代理时默认「直连」。 */
-        fun defaultRuleMode(): String =
-            if (siteProxyManager.globalMode == SiteProxyManager.MODE_PROXY) {
-                SiteProxyManager.MODE_DIRECT
-            } else {
-                SiteProxyManager.MODE_PROXY
-            }
-
-        fun resetRuleEditor() {
-            editingPattern = null
-            dialogBinding.tvRuleEditTitle.setText(R.string.proxy_add_rule_title)
-            dialogBinding.etRulePattern.setText("")
-            if (defaultRuleMode() == SiteProxyManager.MODE_PROXY) {
-                dialogBinding.rbRuleProxy.isChecked = true
-            } else {
-                dialogBinding.rbRuleDirect.isChecked = true
-            }
-            dialogBinding.btnRuleSave.setText(R.string.proxy_add_rule)
-            dialogBinding.btnRuleCancel.visibility = View.GONE
-        }
-
-        fun beginEdit(rule: SiteProxyRule) {
-            editingPattern = rule.pattern
-            dialogBinding.tvRuleEditTitle.setText(R.string.proxy_edit_rule_title)
-            dialogBinding.etRulePattern.setText(rule.pattern)
-            dialogBinding.etRulePattern.setSelection(dialogBinding.etRulePattern.text.length)
-            if (rule.mode == SiteProxyManager.MODE_PROXY) {
-                dialogBinding.rbRuleProxy.isChecked = true
-            } else {
-                dialogBinding.rbRuleDirect.isChecked = true
-            }
-            dialogBinding.btnRuleSave.setText(R.string.proxy_save_rule)
-            dialogBinding.btnRuleCancel.visibility = View.VISIBLE
-            // 编辑区在列表下方，滚动过去避免用户还要手动找
-            dialogBinding.scrollRoot.post {
-                dialogBinding.scrollRoot.smoothScrollTo(0, dialogBinding.tvRuleEditTitle.top)
-            }
-        }
-
-        /** 程序化切换单选时不触发监听，避免重复应用代理。 */
-        var syncingCurrentSite = false
-
-        /** 当前网站自己的精确规则；没有则为 null（跟随全局）。 */
-        fun exactSiteRule(): SiteProxyRule? {
-            val host = pageHost ?: return null
-            return siteProxyManager.rules().firstOrNull { it.pattern == host }
-        }
-
-        /** 刷新顶部「当前网站」快捷设置的状态文案与选中项。 */
-        fun refreshCurrentSiteSection() {
-            val host = pageHost
-            if (host == null) {
-                dialogBinding.currentSiteSection.visibility = View.GONE
-                return
-            }
-            dialogBinding.currentSiteSection.visibility = View.VISIBLE
-            dialogBinding.tvCurrentSiteHost.text = host
-            val rule = siteProxyManager.effectiveRule(host)
-            val effectiveLabel = getString(
-                if (siteProxyManager.effectiveMode(host) == SiteProxyManager.MODE_PROXY) {
-                    R.string.proxy_enabled
-                } else {
-                    R.string.proxy_direct
-                }
-            )
-            dialogBinding.tvCurrentSiteEffective.text = if (rule == null) {
-                getString(R.string.proxy_current_site_effective, effectiveLabel)
-            } else {
-                getString(R.string.proxy_current_site_effective_rule, effectiveLabel, rule.pattern)
-            }
-            val checkedId = when (exactSiteRule()?.mode) {
-                SiteProxyManager.MODE_PROXY -> R.id.rbSiteProxy
-                SiteProxyManager.MODE_DIRECT -> R.id.rbSiteDirect
-                else -> R.id.rbSiteFollowGlobal
-            }
-            if (dialogBinding.rgCurrentSite.checkedRadioButtonId != checkedId) {
-                syncingCurrentSite = true
-                dialogBinding.rgCurrentSite.check(checkedId)
-                syncingCurrentSite = false
-            }
-        }
-
-        fun renderRules() {
-            val query = dialogBinding.etRuleSearch.text?.toString()?.trim()?.lowercase().orEmpty()
-            val allRules = siteProxyManager.rules()
-            val visibleRules = if (query.isEmpty()) {
-                allRules
-            } else {
-                allRules.filter { rule ->
-                    rule.pattern.contains(query) ||
-                        getString(
-                            if (rule.mode == SiteProxyManager.MODE_PROXY) {
-                                R.string.proxy_enabled
-                            } else {
-                                R.string.proxy_direct
-                            }
-                        ).contains(query)
-                }
-            }
-
-            dialogBinding.rulesContainer.removeAllViews()
-            visibleRules.forEach { rule ->
-                val row = LinearLayout(this)
-                row.orientation = LinearLayout.HORIZONTAL
-                row.gravity = Gravity.CENTER_VERTICAL
-                row.setPadding(dpToPx(8), dpToPx(10), dpToPx(8), dpToPx(10))
-                row.isClickable = true
-                val outValue = TypedValue()
-                if (theme.resolveAttribute(android.R.attr.selectableItemBackground, outValue, true)) {
-                    row.setBackgroundResource(outValue.resourceId)
-                }
-                row.setOnClickListener { beginEdit(rule) }
-
-                val labels = LinearLayout(this)
-                labels.orientation = LinearLayout.VERTICAL
-                labels.layoutParams = LinearLayout.LayoutParams(
-                    0,
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    1f
-                )
-
-                val patternView = TextView(this)
-                patternView.text = rule.pattern
-                patternView.setTextColor(ContextCompat.getColor(this, R.color.text_primary))
-                patternView.textSize = 14f
-                patternView.maxLines = 1
-                patternView.ellipsize = TextUtils.TruncateAt.END
-                labels.addView(patternView)
-
-                val modeView = TextView(this)
-                modeView.text = getString(
-                    if (rule.mode == SiteProxyManager.MODE_PROXY) {
-                        R.string.proxy_enabled
-                    } else {
-                        R.string.proxy_direct
-                    }
-                )
-                modeView.setTextColor(
-                    ContextCompat.getColor(
-                        this,
-                        if (rule.mode == SiteProxyManager.MODE_PROXY) R.color.red else R.color.text_secondary
-                    )
-                )
-                modeView.textSize = 12f
-                labels.addView(modeView)
-
-                row.addView(labels)
-
-                val deleteView = TextView(this)
-                deleteView.text = getString(R.string.delete)
-                deleteView.setTextColor(ContextCompat.getColor(this, R.color.red))
-                deleteView.textSize = 13f
-                deleteView.setPadding(dpToPx(12), dpToPx(6), dpToPx(4), dpToPx(6))
-                deleteView.isClickable = true
-                deleteView.setOnClickListener {
-                    siteProxyManager.deleteRule(rule.pattern)
-                    if (editingPattern == rule.pattern) resetRuleEditor()
-                    refreshCurrentSiteSection()
-                    renderRules()
-                    updateSiteProxyIndicator()
-                    applySiteProxyConfig(reload = true)
-                }
-                row.addView(deleteView)
-
-                dialogBinding.rulesContainer.addView(row)
-
-                val divider = View(this)
-                divider.setBackgroundColor(ContextCompat.getColor(this, R.color.divider))
-                divider.layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    dpToPx(1).coerceAtLeast(1)
-                )
-                dialogBinding.rulesContainer.addView(divider)
-            }
-
-            dialogBinding.tvNoRules.visibility =
-                if (visibleRules.isEmpty()) View.VISIBLE else View.GONE
-            dialogBinding.tvNoRules.setText(
-                if (query.isEmpty()) R.string.proxy_no_rules else R.string.proxy_no_search_result
-            )
-            dialogBinding.tvRuleCount.text = if (query.isEmpty()) {
-                getString(R.string.proxy_rule_count, visibleRules.size)
-            } else {
-                getString(R.string.proxy_search_result_count, visibleRules.size)
-            }
-        }
-
-        // 全局默认（先设初值，再挂监听，避免初始化时触发应用）
-        if (siteProxyManager.globalMode == SiteProxyManager.MODE_PROXY) {
-            dialogBinding.rbGlobalProxy.isChecked = true
-        } else {
-            dialogBinding.rbGlobalDirect.isChecked = true
-        }
-
-        dialogBinding.etProxyUrl.setText(siteProxyManager.proxyUrl)
-        dialogBinding.etProxyUrl.setSelection(dialogBinding.etProxyUrl.text.length)
-
-        resetRuleEditor()
-        renderRules()
-
-        // 当前网站快捷设置：先设初值，再挂监听，避免初始化时触发应用
-        refreshCurrentSiteSection()
-
-        dialogBinding.rgCurrentSite.setOnCheckedChangeListener { _, checkedId ->
-            if (syncingCurrentSite) return@setOnCheckedChangeListener
-            val host = pageHost ?: return@setOnCheckedChangeListener
-            val current = when (exactSiteRule()?.mode) {
-                SiteProxyManager.MODE_PROXY -> R.id.rbSiteProxy
-                SiteProxyManager.MODE_DIRECT -> R.id.rbSiteDirect
-                else -> R.id.rbSiteFollowGlobal
-            }
-            if (checkedId == current) return@setOnCheckedChangeListener
-
-            when (checkedId) {
-                R.id.rbSiteProxy -> {
-                    siteProxyManager.addOrUpdateRule(host, SiteProxyManager.MODE_PROXY)
-                    Toast.makeText(this, R.string.proxy_site_saved_proxy, Toast.LENGTH_SHORT).show()
-                }
-                R.id.rbSiteDirect -> {
-                    siteProxyManager.addOrUpdateRule(host, SiteProxyManager.MODE_DIRECT)
-                    Toast.makeText(this, R.string.proxy_site_saved_direct, Toast.LENGTH_SHORT).show()
-                }
-                else -> {
-                    siteProxyManager.deleteRule(host)
-                    Toast.makeText(this, R.string.proxy_site_following_global, Toast.LENGTH_SHORT).show()
-                }
-            }
-            // 若下方编辑区正在编辑本站规则，它已不存在，回到新增状态
-            if (editingPattern == host) resetRuleEditor()
-            refreshCurrentSiteSection()
-            renderRules()
-            updateSiteProxyIndicator()
-            applySiteProxyConfig(reload = true)
-        }
-
-        dialogBinding.rgGlobal.setOnCheckedChangeListener { _, checkedId ->
-            val mode = if (checkedId == R.id.rbGlobalProxy) {
-                SiteProxyManager.MODE_PROXY
-            } else {
-                SiteProxyManager.MODE_DIRECT
-            }
-            if (siteProxyManager.globalMode != mode) {
-                siteProxyManager.globalMode = mode
-                refreshCurrentSiteSection()
-                updateSiteProxyIndicator()
-                applySiteProxyConfig(reload = true)
-            }
-        }
-
-        dialogBinding.btnApplyProxyUrl.setOnClickListener {
-            val newUrl = SiteProxyManager.normalizeProxyUrl(dialogBinding.etProxyUrl.text?.toString())
-            if (newUrl == null) {
-                Toast.makeText(this, R.string.proxy_invalid_address, Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            siteProxyManager.proxyUrl = newUrl
-            dialogBinding.etProxyUrl.setText(newUrl)
-            updateSiteProxyIndicator()
-            if (siteProxyManager.effectiveMode(pageHost) == SiteProxyManager.MODE_PROXY) {
-                siteProxyManager.checkProxyReachable { ok ->
-                    if (!ok) {
-                        Toast.makeText(this, R.string.proxy_unreachable, Toast.LENGTH_SHORT).show()
-                    }
-                }
-            } else {
-                maybeShowVpnHint()
-            }
-            applySiteProxyConfig(reload = true)
-            Toast.makeText(this, R.string.proxy_applied, Toast.LENGTH_SHORT).show()
-        }
-
-        dialogBinding.etRuleSearch.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-            override fun afterTextChanged(s: Editable?) = renderRules()
-        })
-
-        dialogBinding.btnUseCurrent.setOnClickListener {
-            if (pageHost == null) {
-                Toast.makeText(this, R.string.proxy_no_current_site, Toast.LENGTH_SHORT).show()
-            } else {
-                dialogBinding.etRulePattern.setText(pageHost)
-                dialogBinding.etRulePattern.setSelection(dialogBinding.etRulePattern.text.length)
-            }
-        }
-
-        dialogBinding.btnRuleCancel.setOnClickListener { resetRuleEditor() }
-
-        dialogBinding.btnRuleSave.setOnClickListener {
-            val pattern = SiteProxyManager.normalizePattern(dialogBinding.etRulePattern.text?.toString())
-            if (pattern == null) {
-                Toast.makeText(this, R.string.proxy_invalid_pattern, Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            val mode = if (dialogBinding.rbRuleProxy.isChecked) {
-                SiteProxyManager.MODE_PROXY
-            } else {
-                SiteProxyManager.MODE_DIRECT
-            }
-
-            if (siteProxyManager.ruleConflicts(pattern, mode).isNotEmpty()) {
-                Toast.makeText(this, R.string.proxy_rule_conflict, Toast.LENGTH_LONG).show()
-            }
-
-            val previous = editingPattern
-            val saved = if (previous == null) {
-                siteProxyManager.addOrUpdateRule(pattern, mode)
-            } else {
-                siteProxyManager.updateRule(previous, pattern, mode)
-            }
-            if (saved == null) {
-                Toast.makeText(this, R.string.proxy_invalid_pattern, Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-
-            resetRuleEditor()
-            refreshCurrentSiteSection()
-            renderRules()
-            updateSiteProxyIndicator()
-            applySiteProxyConfig(reload = true)
-            Toast.makeText(this, R.string.proxy_rule_saved, Toast.LENGTH_SHORT).show()
-        }
-
-        // 标题由布局自绘（标题栏右侧放关闭按钮），这里不再用 setTitle
-        val dialog = AlertDialog.Builder(this, R.style.DialogTheme)
-            .setView(dialogBinding.root)
-            .create()
-        // 关闭按钮位于弹窗右上角
-        dialogBinding.btnProxyDialogClose.setOnClickListener { dialog.dismiss() }
-        dialog.show()
     }
 
     // ==================== 返回键 ====================

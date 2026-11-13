@@ -23,7 +23,6 @@ import androidx.core.app.NotificationCompat
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftBrowserApp
 import com.swiftbrowser.data.entity.DownloadRecord
-import com.swiftbrowser.ui.browser.SiteProxyManager
 import com.swiftbrowser.ui.download.DownloadActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -38,13 +37,13 @@ import java.net.URL
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * 带代理的下载服务。
+ * 应用内下载服务。
  *
- * 系统 DownloadManager 运行在系统进程里，不读 WebView 的 ProxyController，也没有
- * 按请求指定代理的接口，所以下载改由本服务用 HttpURLConnection 完成，并显式挂上
- * 「站点代理设置」里的 HTTP 代理。代理不可用时直接失败，不静默回退直连。
+ * 系统 DownloadManager 拿不到 WebView 的 Cookie 和 UA，所以下载由本服务用
+ * HttpURLConnection 完成。不指定代理，直接连接；开启 VPN/tun 时流量由系统
+ * 自动路由进 tun。
  */
-class ProxyDownloadService : Service() {
+class DownloadService : Service() {
 
     companion object {
         private const val CHANNEL_ID = "downloads"
@@ -62,7 +61,7 @@ class ProxyDownloadService : Service() {
             userAgent: String?,
             referer: String?
         ) {
-            val intent = Intent(context, ProxyDownloadService::class.java).apply {
+            val intent = Intent(context, DownloadService::class.java).apply {
                 putExtra(EXTRA_URL, url)
                 putExtra(EXTRA_FILE_NAME, fileName)
                 putExtra(EXTRA_MIME_TYPE, mimeType)
@@ -145,10 +144,7 @@ class ProxyDownloadService : Service() {
         var targetFile: File? = null
         var finalName = rawFileName
         try {
-            val proxy = SiteProxyManager.httpProxy(this)
-                ?: throw IOException("代理地址无效，请在站点代理设置里填写 host:port")
-
-            val conn = openFollowingRedirects(url, proxy, userAgent, referer)
+            val conn = openFollowingRedirects(url, userAgent, referer)
             val code = conn.responseCode
             if (code !in 200..299) {
                 conn.disconnect()
@@ -239,13 +235,12 @@ class ProxyDownloadService : Service() {
      */
     private fun openFollowingRedirects(
         rawUrl: String,
-        proxy: java.net.Proxy,
         userAgent: String?,
         referer: String?
     ): HttpURLConnection {
         var current = rawUrl
         repeat(6) {
-            val conn = (URL(current).openConnection(proxy) as HttpURLConnection).apply {
+            val conn = (URL(current).openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = false
                 connectTimeout = 15000
                 readTimeout = 30000
