@@ -1499,7 +1499,7 @@ class MainActivity : AppCompatActivity() {
         return try {
             org.json.JSONArray("[$value]").getString(0)
         } catch (_: Exception) {
-            value.trim('"')
+            value.trim("\"")
         }
     }
 
